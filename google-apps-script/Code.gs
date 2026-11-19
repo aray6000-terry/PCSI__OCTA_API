@@ -354,7 +354,7 @@ function handleRequest(e) {
     switch (action) {
       case "ping":
         result = {
-          success: true, apiVersion: "20261119_V9", message: "Leave System API is online.", timestamp: new Date().toISOString(),
+          success: true, apiVersion: "20261119_V10", message: "Leave System API is online.", timestamp: new Date().toISOString(),
           googleClientId: getGoogleClientId_(), passwordLoginEnabled: isPasswordLoginEnabled_()
         };
         break;
@@ -377,6 +377,23 @@ function handleRequest(e) {
 
       case "setSystemSetting":
         result = setSystemSetting(params);
+        break;
+
+      // ---- 線上打卡 (Attendance.gs) ----
+      case "punch":
+        result = punch(params);
+        break;
+
+      case "getAttendance":
+        result = getAttendance(params);
+        break;
+
+      case "listLocations":
+        result = listLocations(params);
+        break;
+
+      case "saveLocation":
+        result = saveLocation(params);
         break;
 
       case "calculateHours":

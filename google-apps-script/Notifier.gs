@@ -44,6 +44,10 @@ function sendDailyPendingDigest() {
   try {
     syncLeaveTypes(ss);
     syncStatutoryAnnualLeaves(ss);
+    // 線上打卡：判定昨天的出勤，寫入 attendance_daily (需有 Attendance.gs)
+    if (typeof judgeAttendanceForDate_ === "function") {
+      judgeAttendanceForDate_(Utilities.formatDate(new Date(Date.now() - 86400000), "Asia/Taipei", "yyyy-MM-dd"));
+    }
   } catch (e) {
     console.error("每日維護失敗：" + (e && e.stack ? e.stack : e));
   }

@@ -211,7 +211,7 @@ const App = {
         this.showLoading(`歡迎回來，${res.user.name}`, "正在同步個人最新差勤額度與紀錄...");
         await this.loadData(res.user.id);
         this.renderHeader();
-        this.navigate("dashboard");
+        this.navigate(this.isMobileDevice() ? "punch" : "dashboard"); // 手機登入後直接到打卡頁
         this.hideLoading();
         this.showToast(`歡迎回來，${res.user.name} (${res.user.department_name} ${res.user.role})！`, "success");
         if (res.mustChangePassword) {
@@ -611,6 +611,12 @@ const App = {
       viewName = "dashboard";
     }
 
+    if (viewName === "work-locations" && !this.canManageLocations(user)) {
+      this.showToast("權限不足：打卡地點僅限主管、人資與管理者設定。", "error");
+      viewName = "dashboard";
+    }
+    if (viewName !== "punch") this.stopPunchClock();
+
     if (viewName === "accounts" && !this.canManageAccounts(user)) {
       this.showToast("權限不足：帳號權限僅限超級使用者與管理者。", "error");
       viewName = "dashboard";
@@ -651,6 +657,9 @@ const App = {
       "approvals": { title: "審核簽核中心", sub: "支援主管與人資進行請假、銷假與加班換補休之審核" },
       "calendar": { title: "團隊差勤行事曆", sub: "檢視部門差勤分佈與 2026 國定假日排程" },
       "hr-management": { title: "人事差勤與特休額度管理", sub: "全員到職日維護、勞基法歷年制特休額度核算與法定特休同步" },
+      "punch": { title: "線上打卡", sub: "彈性上班 08:30～09:00，應下班 = 到班 + 9.5 小時" },
+      "my-attendance": { title: "我的出勤", sub: "每日上下班時間、遲到早退與外勤紀錄" },
+      "work-locations": { title: "打卡地點", sub: "公司與工地的打卡範圍；完工後自動停用" },
       "accounts": { title: "帳號權限管理", sub: "以 Google 帳號 Email 開通、停用同仁的登入權限與角色" },
       "system-settings": { title: "系統後端與資料庫串接設定", sub: "管理 Google Apps Script Web App 雲端連線與資料庫路徑" },
       "settings": { title: "系統後端與資料庫串接設定", sub: "管理 Google Apps Script 雲端同步與資料庫路徑" }
@@ -686,6 +695,15 @@ const App = {
         break;
       case "accounts":
         this.renderAccountsView();
+        break;
+      case "punch":
+        this.renderPunchView();
+        break;
+      case "my-attendance":
+        this.renderMyAttendanceView();
+        break;
+      case "work-locations":
+        this.renderWorkLocationsView();
         break;
       case "system-settings":
         this.renderSystemSettings();
@@ -2690,6 +2708,433 @@ const App = {
     });
   },
 
+  // ======================== 線上打卡 ========================
+  canManageLocations(user) {
+    if (!user) return false;
+    const role = String(user.role || "").trim().toLowerCase();
+    return !!user.isSuperAdmin || ["admin", "hr", "manager"].indexOf(role) !== -1;
+  },
+
+  getDeviceId() {
+    const KEY = "LEAVE_SYS_DEVICE_ID";
+    let id = null;
+    try { id = localStorage.getItem(KEY); } catch (e) {}
+    if (!id) {
+      id = "D-" + this.randomToken().slice(0, 16);
+      try { localStorage.setItem(KEY, id); } catch (e) {}
+    }
+    return id;
+  },
+
+  stopPunchClock() {
+    if (this._punchClockTimer) { clearInterval(this._punchClockTimer); this._punchClockTimer = null; }
+  },
+
+  async renderPunchView() {
+    const tick = () => {
+      const d = new Date();
+      const p = n => String(n).padStart(2, "0");
+      const wd = "日一二三四五六"[d.getDay()];
+      const c = document.getElementById("punchClock");
+      const dt = document.getElementById("punchDate");
+      if (c) c.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      if (dt) dt.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${wd}）`;
+    };
+    tick();
+    this.stopPunchClock();
+    this._punchClockTimer = setInterval(tick, 1000);
+
+    if (!ApiService.isUsingRemoteGas()) {
+      document.getElementById("punchTodayStatus").textContent = "線上打卡需連線雲端資料庫，展示模式無法使用。";
+      return;
+    }
+    await this.loadPunchLocations();
+    this.refreshPunchLocation();
+    this.loadPunchToday();
+  },
+
+  async loadPunchLocations(force) {
+    if (!force && this._punchLocs && Date.now() - this._punchLocs.at < 5 * 60 * 1000) return this._punchLocs.data;
+    try {
+      const res = await ApiService.callApi("listLocations");
+      if (res && res.success) {
+        this._punchLocs = { at: Date.now(), data: res };
+        const dl = document.getElementById("punchSiteList");
+        if (dl) {
+          const names = Array.from(new Set(res.locations.filter(l => l.active && l.type !== "公司").map(l => l.name).concat(res.recentSites || [])));
+          dl.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join("");
+        }
+        return res;
+      }
+    } catch (e) { console.warn("讀取打卡地點失敗", e); }
+    return null;
+  },
+
+  distanceM(lat1, lng1, lat2, lng2) {
+    const R = 6371000, r = d => d * Math.PI / 180;
+    const a = Math.sin(r(lat2 - lat1) / 2) ** 2 + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.sin(r(lng2 - lng1) / 2) ** 2;
+    return Math.round(2 * R * Math.asin(Math.sqrt(a)));
+  },
+
+  getCurrentPosition(fresh) {
+    return new Promise(resolve => {
+      if (!navigator.geolocation) return resolve({ error: "這台裝置不支援定位。" });
+      navigator.geolocation.getCurrentPosition(
+        p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, at: Date.now() }),
+        err => resolve({ error: err.code === 1
+          ? "您拒絕了定位權限。請到手機的「設定 → Safari / Chrome → 位置」允許，再按「重新定位」。"
+          : "暫時抓不到位置，請到室外或窗邊後按「重新定位」。" }),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: fresh ? 0 : 30000 }
+      );
+    });
+  },
+
+  async refreshPunchLocation(fresh) {
+    const box = document.getElementById("punchLocation");
+    const title = document.getElementById("punchLocTitle");
+    const sub = document.getElementById("punchLocSub");
+    if (!box) return;
+    box.className = "punch-location";
+    title.textContent = "定位中...";
+    sub.textContent = "請允許瀏覽器取得您的位置";
+    const pos = await this.getCurrentPosition(fresh);
+    this.state.punchPos = pos;
+
+    const locs = (this._punchLocs && this._punchLocs.data && this._punchLocs.data.locations || [])
+      .filter(l => l.active && l.lat !== "" && l.lng !== "");
+    let inRange = false;
+    if (pos.error) {
+      title.textContent = "無法取得位置";
+      sub.textContent = pos.error + " 仍可用外勤打卡（需拍照）。";
+      box.className = "punch-location out-range";
+    } else {
+      let best = null;
+      locs.forEach(l => {
+        const d = this.distanceM(pos.lat, pos.lng, parseFloat(l.lat), parseFloat(l.lng));
+        if (!best || d < best.d) best = { l, d };
+      });
+      inRange = !!(best && best.d <= (parseFloat(best.l.radius_m) || 200));
+      if (inRange) {
+        title.textContent = `在「${best.l.name}」範圍內`;
+        sub.textContent = `距離約 ${best.d} 公尺（定位誤差 ±${Math.round(pos.accuracy)} 公尺）`;
+        box.className = "punch-location in-range";
+      } else {
+        title.textContent = "不在公司或已登錄工地範圍內";
+        sub.textContent = best ? `最近的是「${best.l.name}」，約 ${best.d >= 1000 ? (best.d / 1000).toFixed(1) + " 公里" : best.d + " 公尺"}。將以外勤打卡。` : "將以外勤打卡。";
+        box.className = "punch-location out-range";
+      }
+    }
+    const off = document.getElementById("punchOffsite");
+    if (off) off.hidden = inRange;
+  },
+
+  handlePunchPhoto(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const label = document.getElementById("punchPhotoLabel");
+    if (label) label.textContent = "處理照片中...";
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      // 壓縮：長邊最多 1280px、JPEG 品質 0.7，通常 150～300KB
+      const max = 1280, scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      this.state.punchPhoto = canvas.toDataURL("image/jpeg", 0.7);
+      URL.revokeObjectURL(url);
+      const prev = document.getElementById("punchPhotoPreview");
+      if (prev) { prev.src = this.state.punchPhoto; prev.hidden = false; }
+      if (label) label.textContent = "重拍";
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      this.state.punchPhoto = null;
+      if (label) label.textContent = "拍現場照片";
+      this.showToast("照片讀取失敗，請重新拍照。", "error");
+    };
+    img.src = url;
+  },
+
+  resetPunchOffsite() {
+    this.state.punchPhoto = null;
+    const prev = document.getElementById("punchPhotoPreview");
+    if (prev) { prev.hidden = true; prev.removeAttribute("src"); }
+    const input = document.getElementById("punchPhotoInput");
+    if (input) input.value = "";
+    const label = document.getElementById("punchPhotoLabel");
+    if (label) label.textContent = "拍現場照片";
+    const note = document.getElementById("punchNote");
+    if (note) note.value = "";
+  },
+
+  async submitPunch(type) {
+    if (this.state.isSubmitting) return;
+    const btns = [document.getElementById("btnPunchIn"), document.getElementById("btnPunchOut")];
+    const active = type === "IN" ? btns[0] : btns[1];
+    const label = active ? active.querySelector("span").textContent : "";
+    this.state.isSubmitting = true;
+    btns.forEach(b => b && (b.disabled = true));
+    if (active) active.querySelector("span").textContent = "打卡中...";
+    try {
+      // 位置超過 1 分鐘就重新抓一次
+      let pos = this.state.punchPos;
+      if (!pos || pos.error || Date.now() - (pos.at || 0) > 60000) {
+        await this.refreshPunchLocation();
+        pos = this.state.punchPos;
+      }
+      const params = {
+        type,
+        deviceId: this.getDeviceId(),
+        siteName: (document.getElementById("punchSiteName") || {}).value || "",
+        note: (document.getElementById("punchNote") || {}).value || "",
+        photo: this.state.punchPhoto || ""
+      };
+      if (pos && !pos.error) Object.assign(params, { lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy });
+
+      const res = await ApiService.callApi("punch", params);
+      if (res && res.success) {
+        this.showToast(res.message, "success");
+        if (navigator.vibrate) navigator.vibrate(80);
+        this.resetPunchOffsite();
+        if (res.today) this.renderPunchToday(res.today);
+      } else {
+        if (res && res.needOffsite) {
+          const off = document.getElementById("punchOffsite");
+          if (off) { off.hidden = false; off.scrollIntoView({ behavior: "smooth", block: "center" }); }
+        }
+        this.showToast(res ? res.message : "打卡失敗，請再試一次。", "error");
+      }
+    } catch (err) {
+      this.showToast("打卡失敗：" + (err.message || "網路異常，請再試一次"), "error");
+    } finally {
+      this.state.isSubmitting = false;
+      btns.forEach(b => b && (b.disabled = false));
+      if (active) active.querySelector("span").textContent = label;
+    }
+  },
+
+  async loadPunchToday() {
+    const p = n => String(n).padStart(2, "0");
+    const d = new Date();
+    try {
+      const res = await ApiService.callApi("getAttendance", { month: `${d.getFullYear()}-${p(d.getMonth() + 1)}` });
+      if (res && res.success && res.days && res.days.length) {
+        const today = res.days[0];
+        this.renderPunchToday({ date: today.date, logs: today.logs || [], judged: today });
+      } else if (res && !res.success) {
+        document.getElementById("punchTodayStatus").textContent = res.message || "無法讀取今日出勤";
+      }
+    } catch (e) {
+      document.getElementById("punchTodayStatus").textContent = "無法讀取今日出勤，請檢查網路。";
+    }
+  },
+
+  renderPunchToday(today) {
+    const j = today.judged || {};
+    const logs = today.logs || [];
+    const st = document.getElementById("punchTodayStatus");
+    if (st) {
+      let text = `今天：${j.status || "--"}`;
+      if (j.first_in && j.expected_out) text += `　應下班 ${j.expected_out}`;
+      st.textContent = text;
+    }
+    const list = document.getElementById("punchTodayList");
+    if (list) {
+      list.innerHTML = logs.length ? logs.map(l => `
+        <div class="punch-log-row">
+          <span class="att-badge ${l.type === "IN" ? "ok" : "warn"}">${l.type === "IN" ? "上班" : "下班"}</span>
+          <span class="t">${esc(String(l.punched_at).slice(11, 16))}</span>
+          <span class="where">${l.in_range ? esc(l.location_name) : "外勤：" + esc(l.site_name || "")}${l.has_photo ? " · 已拍照" : ""}${l.flags ? ` <span class="att-flag">${esc(l.flags)}</span>` : ""}</span>
+        </div>`).join("") : `<p class="punch-hint">今天還沒有打卡紀錄。</p>`;
+    }
+    const hasIn = logs.some(l => l.type === "IN");
+    const bIn = document.getElementById("btnPunchIn"), bOut = document.getElementById("btnPunchOut");
+    if (bIn) bIn.classList.toggle("suggested", !hasIn);
+    if (bOut) bOut.classList.toggle("suggested", hasIn);
+  },
+
+  // ---------- 我的出勤 ----------
+  attBadgeClass(status) {
+    const s = String(status || "");
+    if (/^正常/.test(s)) return "ok";
+    if (/未打卡/.test(s)) return "bad";
+    if (/遲到|早退|缺|晚下班/.test(s)) return "warn";
+    if (/請假/.test(s)) return "leave";
+    if (/休息日|免打卡/.test(s)) return "off";
+    return "";
+  },
+
+  renderMyAttendanceView() {
+    const m = document.getElementById("attMonth");
+    if (m && !m.value) {
+      const d = new Date();
+      m.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    }
+    this.loadMyAttendance();
+  },
+
+  async loadMyAttendance() {
+    const tbody = document.getElementById("attTableBody");
+    if (!tbody) return;
+    if (!ApiService.isUsingRemoteGas()) {
+      tbody.innerHTML = `<tr><td colspan="6" class="att-empty">出勤紀錄需連線雲端資料庫，展示模式無法使用。</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = `<tr><td colspan="6" class="att-empty">載入中...</td></tr>`;
+    const sel = document.getElementById("attUserSelect");
+    const month = (document.getElementById("attMonth") || {}).value;
+    const params = { month };
+    if (sel && !sel.hidden && sel.value) params.targetUserId = sel.value;
+    const res = await ApiService.callApi("getAttendance", params);
+    if (!res || !res.success) {
+      tbody.innerHTML = `<tr><td colspan="6" class="att-empty">${esc(res ? res.message : "讀取失敗")}</td></tr>`;
+      return;
+    }
+    // 主管 / 人資：可切換同仁
+    if (sel && res.viewable && res.viewable.length > 1) {
+      if (!sel.dataset.filled) {
+        sel.innerHTML = res.viewable.map(u => `<option value="${esc(u.id)}">${esc(u.name)}（${esc(u.department_name || "")}）</option>`).join("");
+        sel.dataset.filled = "1";
+      }
+      sel.value = res.user.id;
+      sel.hidden = false;
+    }
+
+    const s = res.stats;
+    const stat = (n, label, cls) => `<div class="att-stat ${n > 0 ? cls : ""}"><b>${n}</b><span>${label}</span></div>`;
+    document.getElementById("attStats").innerHTML =
+      stat(s.attended, "出勤天數", "") +
+      stat(s.late, `遲到（共 ${s.lateMin} 分）`, "warn") +
+      stat(s.early, `早退（共 ${s.earlyMin} 分）`, "warn") +
+      stat(s.missing, "缺卡", "warn") +
+      stat(s.absent, "未打卡", "bad") +
+      stat(s.offsite, "外勤天數", "") +
+      stat(s.stayAfter, "晚下班", "warn");
+
+    tbody.innerHTML = res.days.map(d => {
+      const wd = "日一二三四五六"[new Date(d.date.replace(/-/g, "/")).getDay()];
+      const where = (d.logs || []).map(l => {
+        const place = l.in_range ? l.location_name : "外勤：" + (l.site_name || "");
+        const photo = l.photo_url && res.canSeePhotos ? ` <a href="${esc(safeHttpUrl(l.photo_url) || "#")}" target="_blank" rel="noopener noreferrer">照片</a>` : (l.has_photo ? " · 已拍照" : "");
+        return `${l.type === "IN" ? "上" : "下"} ${esc(String(l.punched_at).slice(11, 16))} ${esc(place)}${photo}${l.flags ? ` <span class="att-flag">${esc(l.flags)}</span>` : ""}`;
+      }).join("<br>");
+      const extra = [d.late_min > 0 ? `遲到 ${d.late_min} 分` : "", d.early_min > 0 ? `早退 ${d.early_min} 分` : "", d.stay_after_min >= 30 ? `晚 ${d.stay_after_min} 分下班` : ""].filter(Boolean).join("、");
+      return `<tr>
+        <td>${esc(d.date.slice(5))}（${wd}）${d.holiday ? `<br><span class="punch-hint">${esc(d.holiday)}</span>` : ""}</td>
+        <td>${esc(d.first_in || "—")}</td>
+        <td>${esc(d.last_out || "—")}</td>
+        <td>${esc(d.expected_out || "—")}</td>
+        <td><span class="att-badge ${this.attBadgeClass(d.status)}">${esc(d.status)}</span>${extra ? `<br><span class="punch-hint">${esc(extra)}</span>` : ""}</td>
+        <td class="att-where">${where || "—"}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="6" class="att-empty">這個月還沒有資料。</td></tr>`;
+  },
+
+  // ---------- 打卡地點 ----------
+  async renderWorkLocationsView() {
+    const tbody = document.getElementById("locTableBody");
+    if (!tbody) return;
+    if (!ApiService.isUsingRemoteGas()) {
+      tbody.innerHTML = `<tr><td colspan="7" class="att-empty">需連線雲端資料庫。</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = `<tr><td colspan="7" class="att-empty">載入中...</td></tr>`;
+    const res = await this.loadPunchLocations(true);
+    if (!res) { tbody.innerHTML = `<tr><td colspan="7" class="att-empty">讀取失敗</td></tr>`; return; }
+    this._locEditList = res.locations;
+    tbody.innerHTML = res.locations.map(l => `<tr>
+        <td><strong>${esc(l.name)}</strong></td>
+        <td>${esc(l.type)}</td>
+        <td style="font-size: 0.82rem;">${esc(l.address || "")}${l.lat !== "" ? `<br><span class="punch-hint">${esc(l.lat)}, ${esc(l.lng)}</span>` : `<br><span style="color: var(--danger);">尚未定位</span>`}</td>
+        <td>${esc(l.radius_m)} 公尺</td>
+        <td style="font-size: 0.82rem; white-space: nowrap;">${esc(l.start_date || "—")} ～ ${esc(l.end_date || "—")}</td>
+        <td><span class="att-badge ${l.active ? "ok" : "off"}">${l.active ? "使用中" : "停用"}</span></td>
+        <td style="white-space: nowrap;">
+          <button class="btn btn-sm btn-secondary" onclick="App.editLocation(${jsArg(l.id)})"><i class="fa-solid fa-pen"></i> 編輯</button>
+          ${l.active && l.type !== "公司" ? `<button class="btn btn-sm btn-secondary" style="color: var(--danger);" onclick="App.endLocation(${jsArg(l.id)})">完工</button>` : ""}
+        </td>
+      </tr>`).join("") || `<tr><td colspan="7" class="att-empty">尚無打卡地點</td></tr>`;
+  },
+
+  resetLocationForm() {
+    ["locId", "locName", "locAddress", "locLat", "locLng", "locStart", "locEnd"].forEach(id => { const e = document.getElementById(id); if (e) e.value = ""; });
+    document.getElementById("locType").value = "工地";
+    document.getElementById("locRadius").value = 200;
+    document.getElementById("locCoordsHint").textContent = "";
+    document.getElementById("locFormTitle").textContent = "新增工地";
+  },
+
+  editLocation(id) {
+    const l = (this._locEditList || []).find(x => x.id === id);
+    if (!l) return;
+    document.getElementById("locId").value = l.id;
+    document.getElementById("locName").value = l.name;
+    document.getElementById("locType").value = l.type === "公司" ? "公司" : "工地";
+    document.getElementById("locRadius").value = l.radius_m || 200;
+    document.getElementById("locAddress").value = l.address || "";
+    document.getElementById("locLat").value = l.lat;
+    document.getElementById("locLng").value = l.lng;
+    document.getElementById("locStart").value = l.start_date || "";
+    document.getElementById("locEnd").value = l.end_date || "";
+    document.getElementById("locCoordsHint").textContent = l.lat !== "" ? `目前座標：${l.lat}, ${l.lng}` : "";
+    document.getElementById("locFormTitle").textContent = `編輯：${l.name}`;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  },
+
+  async useCurrentPositionForLocation() {
+    const hint = document.getElementById("locCoordsHint");
+    hint.textContent = "定位中...";
+    const pos = await this.getCurrentPosition(true);
+    if (pos.error) { hint.textContent = pos.error; return; }
+    document.getElementById("locLat").value = pos.lat.toFixed(6);
+    document.getElementById("locLng").value = pos.lng.toFixed(6);
+    hint.textContent = `已取得目前位置（誤差 ±${Math.round(pos.accuracy)} 公尺）`;
+  },
+
+  async handleSaveLocation(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (this.state.isSubmitting) return;
+    const btn = document.getElementById("btnSaveLocation");
+    this.state.isSubmitting = true;
+    if (btn) btn.disabled = true;
+    try {
+      const v = id => document.getElementById(id).value;
+      // 地址有改、又沒有重新按「使用目前位置」時，以地址重新定位
+      const edited = (this._locEditList || []).find(x => x.id === v("locId"));
+      const addressChanged = edited && v("locAddress").trim() !== String(edited.address || "").trim();
+      const params = { id: v("locId") || undefined, name: v("locName"), type: v("locType"), address: v("locAddress"),
+        radius_m: v("locRadius"), start_date: v("locStart"), end_date: v("locEnd") };
+      if (v("locLat") && v("locLng") && !(addressChanged && document.getElementById("locCoordsHint").textContent.indexOf("已取得") === -1)) {
+        params.lat = v("locLat"); params.lng = v("locLng");
+      }
+      const res = await ApiService.callApi("saveLocation", params);
+      if (res.success) {
+        this.showToast(res.message, "success");
+        this.resetLocationForm();
+        this.renderWorkLocationsView();
+      } else {
+        this.showToast(res.message, "error");
+      }
+    } finally {
+      this.state.isSubmitting = false;
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  async endLocation(id) {
+    const l = (this._locEditList || []).find(x => x.id === id);
+    if (!l || !confirm(`確定「${l.name}」已完工、停用這個打卡地點嗎？之後在這裡打卡會改為外勤打卡。`)) return;
+    const d = new Date(Date.now() - 86400000);
+    const yesterday = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const res = await ApiService.callApi("saveLocation", Object.assign({}, l, {
+      end_date: yesterday, start_date: l.start_date && l.start_date > yesterday ? yesterday : l.start_date
+    }));
+    if (res.success) { this.showToast(`已停用「${l.name}」。`, "success"); this.renderWorkLocationsView(); }
+    else this.showToast(res.message, "error");
+  },
+
   // ======================== 帳號權限管理 ========================
   canManageAccounts(user) {
     if (!user) return false;
@@ -3348,6 +3793,9 @@ const App = {
     }
 
     // 人事差勤維護選單：HR 與最高管理者 (Admin) 顯示
+    const navWorkLocations = document.getElementById("navWorkLocations");
+    if (navWorkLocations) navWorkLocations.style.display = this.canManageLocations(user) ? "flex" : "none";
+
     const navAccounts = document.getElementById("navAccounts");
     if (navAccounts) navAccounts.style.display = this.canManageAccounts(user) ? "flex" : "none";
 

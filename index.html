@@ -115,6 +115,14 @@
 
       <nav class="sidebar-nav">
         <div class="nav-section-title">個人差勤</div>
+        <a class="nav-item" data-view="punch">
+          <i class="fa-solid fa-fingerprint"></i>
+          <span>打卡</span>
+        </a>
+        <a class="nav-item" data-view="my-attendance">
+          <i class="fa-solid fa-calendar-check"></i>
+          <span>我的出勤</span>
+        </a>
         <a class="nav-item active" data-view="dashboard">
           <i class="fa-solid fa-house-chimney"></i>
           <span>差勤儀表板</span>
@@ -137,6 +145,10 @@
         </a>
 
         <div class="nav-section-title">管理與審核</div>
+        <a class="nav-item" data-view="work-locations" id="navWorkLocations" style="display: none;">
+          <i class="fa-solid fa-map-location-dot"></i>
+          <span>打卡地點</span>
+        </a>
         <a class="nav-item" data-view="approvals" id="navApprovals">
           <i class="fa-solid fa-signature"></i>
           <span>審核簽核中心</span>
@@ -949,6 +961,149 @@
           </div>
         </section>
 
+        <!-- ==================== 線上打卡 ==================== -->
+        <section class="view-section" id="view-punch">
+          <div class="punch-wrap">
+            <div class="punch-clock-card">
+              <div class="punch-date" id="punchDate">--</div>
+              <div class="punch-time" id="punchClock">--:--:--</div>
+              <div class="punch-status-line" id="punchTodayStatus">載入今日出勤中...</div>
+            </div>
+
+            <div class="punch-location" id="punchLocation">
+              <i class="fa-solid fa-location-crosshairs"></i>
+              <div>
+                <strong id="punchLocTitle">定位中...</strong>
+                <span id="punchLocSub">請允許瀏覽器取得您的位置</span>
+              </div>
+              <button type="button" class="btn btn-sm btn-secondary" onclick="App.refreshPunchLocation(true)"><i class="fa-solid fa-rotate"></i> 重新定位</button>
+            </div>
+
+            <!-- 外勤打卡：範圍外才出現 -->
+            <div class="punch-offsite" id="punchOffsite" hidden>
+              <div class="punch-offsite-title"><i class="fa-solid fa-helmet-safety"></i> 外勤打卡：請填工地並拍一張現場照片</div>
+              <div class="form-group">
+                <label class="form-label">工地 / 客戶名稱 <span class="req-star">*</span></label>
+                <input type="text" class="form-control" id="punchSiteName" list="punchSiteList" placeholder="選擇或輸入工地名稱" maxlength="80">
+                <datalist id="punchSiteList"></datalist>
+              </div>
+              <div class="form-group">
+                <label class="form-label">現場照片 <span class="req-star">*</span></label>
+                <label class="punch-photo-btn" for="punchPhotoInput">
+                  <i class="fa-solid fa-camera"></i> <span id="punchPhotoLabel">拍現場照片</span>
+                </label>
+                <input type="file" id="punchPhotoInput" accept="image/*" capture="environment" hidden onchange="App.handlePunchPhoto(this)">
+                <img id="punchPhotoPreview" class="punch-photo-preview" alt="" hidden>
+                <p class="punch-hint">拍現場即可，不需要自拍。照片只給人資與管理者查看。</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">備註（選填）</label>
+                <input type="text" class="form-control" id="punchNote" maxlength="200" placeholder="例如：機房設備安裝">
+              </div>
+            </div>
+
+            <div class="punch-buttons">
+              <button type="button" class="punch-btn punch-btn-in" id="btnPunchIn" onclick="App.submitPunch('IN')">
+                <i class="fa-solid fa-right-to-bracket"></i><span>上班打卡</span>
+              </button>
+              <button type="button" class="punch-btn punch-btn-out" id="btnPunchOut" onclick="App.submitPunch('OUT')">
+                <i class="fa-solid fa-right-from-bracket"></i><span>下班打卡</span>
+              </button>
+            </div>
+
+            <div class="form-card punch-today-card">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-list-check" style="color: var(--primary);"></i> 今天的打卡</div>
+                <a href="#" onclick="App.navigate('my-attendance'); return false;" class="punch-link">查看我的出勤 <i class="fa-solid fa-angle-right"></i></a>
+              </div>
+              <div id="punchTodayList" class="punch-today-list"><p class="punch-hint">今天還沒有打卡紀錄。</p></div>
+              <p class="punch-hint punch-rule">彈性上班 08:30～09:00 到班，應下班時間 = 到班時間 + 9.5 小時（18:00～18:30）。加班需事前經主管核准。</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 我的出勤 ==================== -->
+        <section class="view-section" id="view-my-attendance">
+          <div style="display: flex; flex-direction: column; gap: 20px; max-width: 1080px; margin: 0 auto;">
+            <div class="attendance-toolbar">
+              <select class="form-control" id="attUserSelect" onchange="App.loadMyAttendance()" hidden></select>
+              <input type="month" class="form-control" id="attMonth" onchange="App.loadMyAttendance()">
+              <button type="button" class="btn btn-sm btn-secondary" onclick="App.loadMyAttendance()"><i class="fa-solid fa-rotate"></i> 重新整理</button>
+            </div>
+            <div class="attendance-stats" id="attStats"></div>
+            <div class="form-card" style="max-width: 100%; width: 100%; box-sizing: border-box;">
+              <div class="table-responsive">
+                <table class="custom-table attendance-table">
+                  <thead>
+                    <tr><th>日期</th><th>上班</th><th>下班</th><th>應下班</th><th>狀態</th><th>地點</th></tr>
+                  </thead>
+                  <tbody id="attTableBody"><tr><td colspan="6" class="att-empty">載入中...</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 打卡地點 (主管 / 人資 / 管理者) ==================== -->
+        <section class="view-section" id="view-work-locations">
+          <div style="display: flex; flex-direction: column; gap: 24px; max-width: 1080px; margin: 0 auto;">
+            <div class="form-card" style="max-width: 100%; width: 100%; box-sizing: border-box;">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-map-pin" style="color: var(--primary);"></i> <span id="locFormTitle">新增工地</span></div>
+              </div>
+              <p class="accounts-help">施工 1 週以上的工地建議先登錄，同仁在範圍內打卡就跟在公司一樣，不用拍照。可輸入地址，或人在現場時按「使用目前位置」。</p>
+              <form class="grant-form" onsubmit="App.handleSaveLocation(event)">
+                <input type="hidden" id="locId">
+                <div class="form-group">
+                  <label class="form-label">名稱 <span class="req-star">*</span></label>
+                  <input type="text" class="form-control" id="locName" required maxlength="60" placeholder="例如：南港某大樓弱電工程">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">類型</label>
+                  <select class="form-control" id="locType"><option value="工地">工地</option><option value="公司">公司</option></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">允許半徑（公尺）</label>
+                  <input type="number" class="form-control" id="locRadius" min="50" max="1000" step="50" value="200">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                  <label class="form-label">地址</label>
+                  <input type="text" class="form-control" id="locAddress" maxlength="120" placeholder="台北市南港區…">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">或：目前位置</label>
+                  <button type="button" class="btn btn-secondary" onclick="App.useCurrentPositionForLocation()"><i class="fa-solid fa-location-dot"></i> 使用目前位置</button>
+                  <span class="punch-hint" id="locCoordsHint"></span>
+                  <input type="hidden" id="locLat"><input type="hidden" id="locLng">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">施工開始</label>
+                  <input type="date" class="form-control" id="locStart">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">施工結束（完工後自動停用）</label>
+                  <input type="date" class="form-control" id="locEnd">
+                </div>
+                <div class="grant-form-actions" style="gap: 8px;">
+                  <button type="button" class="btn btn-secondary" onclick="App.resetLocationForm()">清除</button>
+                  <button type="submit" class="btn btn-primary" id="btnSaveLocation"><i class="fa-solid fa-check"></i> 儲存地點</button>
+                </div>
+              </form>
+            </div>
+            <div class="form-card" style="max-width: 100%; width: 100%; box-sizing: border-box;">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-map-location-dot" style="color: var(--primary);"></i> 打卡地點</div>
+              </div>
+              <div class="table-responsive">
+                <table class="custom-table">
+                  <thead><tr><th>名稱</th><th>類型</th><th>地址 / 座標</th><th>半徑</th><th>施工期間</th><th>狀態</th><th>操作</th></tr></thead>
+                  <tbody id="locTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ==================== 帳號權限管理 (超級使用者 / 管理者) ==================== -->
         <section class="view-section" id="view-accounts">
           <div style="display: flex; flex-direction: column; gap: 24px; max-width: 1080px; margin: 0 auto;">
@@ -1116,17 +1271,17 @@
         <i class="fa-solid fa-file-circle-plus"></i>
         <span>請假</span>
       </a>
-      <a class="mobile-nav-item" data-view="overtime">
-        <i class="fa-solid fa-business-time"></i>
-        <span>補休</span>
+      <a class="mobile-nav-item mobile-nav-punch" data-view="punch">
+        <i class="fa-solid fa-fingerprint"></i>
+        <span>打卡</span>
       </a>
       <a class="mobile-nav-item" data-view="approvals">
         <i class="fa-solid fa-signature"></i>
         <span>審核</span>
       </a>
-      <a class="mobile-nav-item" data-view="calendar">
-        <i class="fa-solid fa-calendar-days"></i>
-        <span>行事曆</span>
+      <a class="mobile-nav-item" data-view="my-attendance">
+        <i class="fa-solid fa-calendar-check"></i>
+        <span>出勤</span>
       </a>
     </nav>
 

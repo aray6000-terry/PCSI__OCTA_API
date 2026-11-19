@@ -155,7 +155,7 @@ const ApiService = {
       "applyLeave", "cancelLeave", "approveLeave", "rejectLeave",
       "applyOvertime", "approveOvertime", "rejectOvertime",
       "adminUpdateBalance", "adminUpdateUser", "adminCreateUser", "adminDeleteUser", "batchReview",
-      "changePassword", "syncStatutoryAnnualLeaves", "syncHolidays"
+      "changePassword", "syncStatutoryAnnualLeaves", "syncHolidays", "punch", "saveLocation"
     ];
     const isMutation = MUTATION_ACTIONS.indexOf(action) !== -1;
     // 登入與異動操作在遠端模式下絕不可降級至本機 Mock (Mock 帳密為展示用，降級會造成假登入/假寫入)
