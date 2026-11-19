@@ -165,9 +165,11 @@ function isUserDisabled_(user) {
   return !!user && String(user.status || "").trim().toLowerCase() === "disabled";
 }
 
-// Google OAuth Client ID：存在「指令碼屬性 GOOGLE_CLIENT_ID」
+// Google OAuth Client ID (Google Cloud 專案 Invoic-0921 的「請假系統網頁」用戶端，2026-11-19 建立)
+// Client ID 不是機密，可以放在程式中；若要更換，在「指令碼屬性」新增 GOOGLE_CLIENT_ID 即可覆蓋。
+const DEFAULT_GOOGLE_CLIENT_ID = "591687398041-9v2475s0g56rjvgbd06fp2viakg7e1qf.apps.googleusercontent.com";
 function getGoogleClientId_() {
-  return PropertiesService.getScriptProperties().getProperty("GOOGLE_CLIENT_ID") || "";
+  return PropertiesService.getScriptProperties().getProperty("GOOGLE_CLIENT_ID") || DEFAULT_GOOGLE_CLIENT_ID;
 }
 
 // 本系統只用 Google (Gmail) 帳號登入、不記錄密碼。
