@@ -170,9 +170,28 @@ function getGoogleClientId_() {
   return PropertiesService.getScriptProperties().getProperty("GOOGLE_CLIENT_ID") || "";
 }
 
-// 過渡期是否仍允許帳號密碼登入 (預設允許；超級使用者可在權限頁關閉)
+// 本系統只用 Google (Gmail) 帳號登入、不記錄密碼。
+// 唯一例外：還沒設定 GOOGLE_CLIENT_ID 的建置期間，暫時允許舊密碼登入，避免所有人被鎖在外面。
 function isPasswordLoginEnabled_() {
-  return PropertiesService.getScriptProperties().getProperty("PASSWORD_LOGIN_ENABLED") !== "false";
+  return !getGoogleClientId_();
+}
+
+// Google 登入啟用後，清除 users 表所有舊密碼 (只做一次)
+function purgePasswords_(ss) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty("PASSWORDS_PURGED") === "true") return 0;
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.USERS);
+  const data = sheet.getDataRange().getValues();
+  const idx = data[0].indexOf("password_hash");
+  let n = 0;
+  if (idx !== -1 && data.length > 1) {
+    const blank = [];
+    for (let i = 1; i < data.length; i++) { if (String(data[i][idx]) !== "") n++; blank.push([""]); }
+    sheet.getRange(2, idx + 1, data.length - 1, 1).setValues(blank);
+  }
+  props.setProperty("PASSWORDS_PURGED", "true");
+  logApproval(ss, "ACCOUNT-ALL", "ACCOUNT", "SYSTEM", "System", "UPDATED", `已改用 Google 帳號登入，清除 ${n} 筆舊密碼`);
+  return n;
 }
 
 // users 表補上 status / last_login_at 欄位 (舊表沒有時自動新增)
@@ -263,6 +282,7 @@ function googleLogin(idToken) {
   }
 
   setUserField_(ss, user.id, "last_login_at", Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd HH:mm:ss"));
+  purgePasswords_(ss);
   return {
     success: true,
     message: "登入成功",
@@ -271,13 +291,9 @@ function googleLogin(idToken) {
   };
 }
 
-/** 超級使用者：系統設定 (目前僅「是否允許帳號密碼登入」) */
+/** 超級使用者：系統設定 (目前無可調整項目；登入固定只用 Google 帳號) */
 function setSystemSetting(params) {
   if (!isSuperAdmin_(params._me)) return { success: false, message: "僅超級使用者可變更系統設定。" };
-  if (params.key === "passwordLoginEnabled") {
-    PropertiesService.getScriptProperties().setProperty("PASSWORD_LOGIN_ENABLED", params.value ? "true" : "false");
-    return { success: true, message: params.value ? "已允許帳號密碼登入。" : "已關閉帳號密碼登入，之後只能用 Google 帳號登入。" };
-  }
   return { success: false, message: "不支援的設定。" };
 }
 
@@ -354,7 +370,7 @@ function handleRequest(e) {
     switch (action) {
       case "ping":
         result = {
-          success: true, apiVersion: "20261119_V10", message: "Leave System API is online.", timestamp: new Date().toISOString(),
+          success: true, apiVersion: "20261119_V11", message: "Leave System API is online.", timestamp: new Date().toISOString(),
           googleClientId: getGoogleClientId_(), passwordLoginEnabled: isPasswordLoginEnabled_()
         };
         break;
@@ -457,7 +473,7 @@ function handleRequest(e) {
         break;
 
       case "changePassword":
-        result = changePassword(params);
+        result = { success: false, message: "本系統只用 Google 帳號登入，不使用密碼。" };
         break;
 
       default:
@@ -2443,16 +2459,9 @@ function adminCreateUser(params) {
     return { success: false, message: `Email: ${email} 已存在於系統中，請勿重複新增！` };
   }
 
-  // 以 Google 帳號登入為主：只有在仍允許密碼登入時，才產生臨時密碼 (只顯示這一次)
-  let tempPassword = null;
-  let plainPassword = password ? String(password) : "";
-  if (plainPassword) {
-    const pwErr = validateNewPassword_(plainPassword);
-    if (pwErr) return { success: false, message: "初始密碼不符規則：" + pwErr };
-  } else if (isPasswordLoginEnabled_()) {
-    plainPassword = tempPassword = generateTempPassword_();
-  }
-  const passwordHash = plainPassword ? hashPassword_(plainPassword) : "";
+  // 只用 Google 帳號登入，不記錄任何密碼
+  const tempPassword = null;
+  const passwordHash = "";
   const deptMap = {
     "研發部": "DEPT_RD",
     "設計部": "DEPT_DESIGN",
@@ -2519,8 +2528,7 @@ function adminCreateUser(params) {
 
   return {
     success: true,
-    message: `已開通 ${name} (${newId})，請本人用 ${String(email).trim().toLowerCase()} 的 Google 帳號登入。特休已依勞基法核發 ${annualHours} 小時。` +
-      (tempPassword ? ` 過渡期臨時密碼：${tempPassword}（僅顯示這一次）` : ""),
+    message: `已開通 ${name} (${newId})，請本人用 ${String(email).trim().toLowerCase()} 的 Google 帳號登入。特休已依勞基法核發 ${annualHours} 小時。`,
     tempPassword: tempPassword,
     user: {
       id: newId,

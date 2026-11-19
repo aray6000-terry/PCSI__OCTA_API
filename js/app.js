@@ -214,9 +214,6 @@ const App = {
         this.navigate(this.isMobileDevice() ? "punch" : "dashboard"); // 手機登入後直接到打卡頁
         this.hideLoading();
         this.showToast(`歡迎回來，${res.user.name} (${res.user.department_name} ${res.user.role})！`, "success");
-        if (res.mustChangePassword) {
-          setTimeout(() => alert("⚠️ 您目前仍在使用預設密碼，請立即到「系統設定」修改密碼（至少 8 碼，需含英文與數字）。"), 300);
-        }
   },
 
   // ======================== Google 帳號登入 ========================
@@ -260,7 +257,7 @@ const App = {
     const googleReady = ApiService.isUsingRemoteGas() && !!cfg.clientId;
     if (card) card.classList.toggle("no-google", !googleReady);
     const sub = document.querySelector("#loginScreen .login-header p");
-    if (sub) sub.textContent = googleReady ? "請使用公司開通的 Google 帳號登入" : "請輸入帳號密碼登入";
+    if (sub) sub.textContent = googleReady ? "請使用公司開通的 Gmail 帳號登入" : "Google 登入設定中，暫用帳號密碼登入";
     if (!googleReady && pw) { pw.hidden = false; pw.open = true; }
 
     if (this.isInAppBrowser()) {
@@ -3217,14 +3214,6 @@ const App = {
       </tr>`;
     }).join("") || `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">找不到符合的帳號</td></tr>`;
 
-    // 登入設定 (只有超級使用者可改)
-    const card = document.getElementById("loginSettingsCard");
-    if (card) card.style.display = me.isSuperAdmin ? "" : "none";
-    const cb = document.getElementById("settingPasswordLogin");
-    if (cb && me.isSuperAdmin) {
-      const cfg = await this.getLoginConfig();
-      cb.checked = !!cfg.passwordLogin;
-    }
   },
 
   async refreshAccounts(message) {
@@ -3255,8 +3244,7 @@ const App = {
       if (res.success) {
         document.getElementById("grantEmail").value = "";
         document.getElementById("grantName").value = "";
-        if (res.tempPassword) alert(res.message);
-        await this.refreshAccounts(res.tempPassword ? "" : res.message);
+        await this.refreshAccounts(res.message);
       } else {
         this.showToast(res.message, "error");
       }
@@ -3296,21 +3284,6 @@ const App = {
     const res = await ApiService.callApi("adminUpdateUser", { id: userId, email });
     if (res.success) await this.refreshAccounts(`${name} 的登入 Email 已改為 ${email}。`);
     else this.showToast(res.message, "error");
-  },
-
-  async togglePasswordLogin(enabled) {
-    if (!enabled && !confirm("關閉後，所有人只能用 Google 帳號登入。請確認大家都已用 Google 帳號登入過。確定關閉嗎？")) {
-      document.getElementById("settingPasswordLogin").checked = true;
-      return;
-    }
-    const res = await ApiService.callApi("setSystemSetting", { key: "passwordLoginEnabled", value: !!enabled });
-    if (res.success) {
-      if (this._loginCfg) this._loginCfg.passwordLogin = !!enabled;
-      this.showToast(res.message, "success");
-    } else {
-      this.showToast(res.message, "error");
-      document.getElementById("settingPasswordLogin").checked = !enabled;
-    }
   },
 
   /**
