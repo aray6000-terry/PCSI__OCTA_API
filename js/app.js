@@ -83,6 +83,15 @@ const App = {
       localStorage.removeItem(SYSTEM_CONFIG.STORAGE_KEYS.GAS_URL);
     }
     ApiService.renderVersionFooter();
+    // 手機整頁 Google 登入回來 (網址 # 後帶有 id_token)
+    if (/(^#|&)(id_token|error)=/.test(location.hash)) {
+      this.hideLoading();
+      const overlay = document.getElementById("loginScreen");
+      if (overlay) overlay.classList.remove("hidden");
+      await this.getLoginConfig();
+      await this.handleGoogleRedirectReturn();
+      return;
+    }
     await this.checkAuth();
     // 確保未登入時也能顯示後端版本
     if (!ApiService._remoteApiVersion && ApiService.isUsingRemoteGas()) {
@@ -140,6 +149,7 @@ const App = {
     } else {
       this.hideLoading();
       if (loginOverlay) loginOverlay.classList.remove("hidden");
+      this.initGoogleLogin();
     }
   },
 
@@ -163,6 +173,31 @@ const App = {
       const res = await ApiService.login(email, password);
 
       if (res.success && res.user) {
+        await this.completeLogin(res);
+      } else {
+        if (errorBanner) {
+          errorBanner.style.display = "flex";
+          document.getElementById("loginErrorMsg").textContent = res.message || "電子信箱或密碼錯誤，請重新確認。";
+        }
+        this.showToast(res.message || "登入失敗", "error");
+      }
+    } catch (err) {
+      if (errorBanner) {
+        errorBanner.style.display = "flex";
+        document.getElementById("loginErrorMsg").textContent = "連線異常：" + err.message;
+      }
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<i class="fa-solid fa-right-to-bracket"></i> 登入系統`;
+      }
+    }
+  },
+
+  /**
+   * 登入成功後的共同流程 (Google 登入與密碼登入共用)
+   */
+  async completeLogin(res) {
         localStorage.setItem(SYSTEM_CONFIG.STORAGE_KEYS.SESSION_LOGGED_IN, "true");
         localStorage.setItem(SYSTEM_CONFIG.STORAGE_KEYS.ACTIVE_USER_ID, res.user.id);
         if (res.token) {
@@ -182,23 +217,167 @@ const App = {
         if (res.mustChangePassword) {
           setTimeout(() => alert("⚠️ 您目前仍在使用預設密碼，請立即到「系統設定」修改密碼（至少 8 碼，需含英文與數字）。"), 300);
         }
-      } else {
-        if (errorBanner) {
-          errorBanner.style.display = "flex";
-          document.getElementById("loginErrorMsg").textContent = res.message || "電子信箱或密碼錯誤，請重新確認。";
-        }
-        this.showToast(res.message || "登入失敗", "error");
+  },
+
+  // ======================== Google 帳號登入 ========================
+  isMobileDevice() {
+    const ua = navigator.userAgent || "";
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  },
+
+  isInAppBrowser() {
+    return /\bLine\/|FBAN|FBAV|Instagram|MicroMessenger|KAKAOTALK/i.test(navigator.userAgent || "");
+  },
+
+  showLoginError(msg) {
+    const banner = document.getElementById("loginErrorBanner");
+    const text = document.getElementById("loginErrorMsg");
+    if (text) text.textContent = msg || "";
+    if (banner) banner.style.display = msg ? "flex" : "none";
+  },
+
+  async getLoginConfig() {
+    if (this._loginCfg) return this._loginCfg;
+    let res = null;
+    if (ApiService.isUsingRemoteGas()) {
+      try { res = await ApiService.callApi("ping"); } catch (e) { res = null; }
+    }
+    this._loginCfg = {
+      clientId: SYSTEM_CONFIG.GOOGLE_CLIENT_ID || (res && res.googleClientId) || "",
+      passwordLogin: !res || res.passwordLoginEnabled !== false
+    };
+    return this._loginCfg;
+  },
+
+  async initGoogleLogin() {
+    const area = document.getElementById("googleLoginArea");
+    if (!area) return;
+    const cfg = await this.getLoginConfig();
+    const pw = document.getElementById("passwordLoginSection");
+    if (pw) pw.hidden = !cfg.passwordLogin;
+
+    if (this.isInAppBrowser()) {
+      this.showLoginError("您正在 App 內建的瀏覽器中（例如 LINE），Google 可能不允許在這裡登入。請按右上角「⋯」選「用瀏覽器開啟」（Safari 或 Chrome）。");
+    }
+    if (!ApiService.isUsingRemoteGas()) {
+      area.innerHTML = `<p class="login-hint">目前為本機展示模式，請使用下方帳號密碼登入。</p>`;
+      if (pw) { pw.hidden = false; pw.open = true; }
+      return;
+    }
+    if (!cfg.clientId) {
+      area.innerHTML = `<p class="login-hint">系統尚未設定 Google 登入，請聯絡管理員。</p>`;
+      if (pw && cfg.passwordLogin) pw.open = true;
+      return;
+    }
+    if (this.isMobileDevice()) {
+      area.innerHTML = `<button type="button" class="btn btn-google" id="btnGoogleRedirect"><i class="fa-brands fa-google"></i> 使用 Google 帳號登入</button>`;
+      document.getElementById("btnGoogleRedirect").onclick = () => this.startGoogleRedirect();
+      return;
+    }
+    area.innerHTML = `<div id="gsiBtn"></div><p class="login-hint"><a href="#" id="lnkGoogleRedirect">按了沒反應？改用整頁登入</a></p>`;
+    document.getElementById("lnkGoogleRedirect").onclick = (e) => { e.preventDefault(); this.startGoogleRedirect(); };
+    const wait = (n) => {
+      if (window.google && google.accounts && google.accounts.id) {
+        google.accounts.id.initialize({
+          client_id: cfg.clientId,
+          callback: (r) => { if (r && r.credential) this.completeGoogleLogin(r.credential); },
+          auto_select: false, cancel_on_tap_outside: false, itp_support: true, use_fedcm_for_prompt: true
+        });
+        google.accounts.id.renderButton(document.getElementById("gsiBtn"), {
+          type: "standard", theme: "outline", size: "large", text: "signin_with", shape: "pill", locale: "zh-TW", width: 260
+        });
+        return;
       }
-    } catch (err) {
-      if (errorBanner) {
-        errorBanner.style.display = "flex";
-        document.getElementById("loginErrorMsg").textContent = "連線異常：" + err.message;
+      if (n > 100) {
+        const b = document.getElementById("gsiBtn");
+        if (b) b.innerHTML = `<p class="login-hint">無法載入 Google 登入元件，請確認網路或關閉擋廣告外掛後重新整理。</p>`;
+        return;
       }
-    } finally {
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = `<i class="fa-solid fa-right-to-bracket"></i> 登入系統`;
-      }
+      setTimeout(() => wait(n + 1), 100);
+    };
+    wait(0);
+  },
+
+  randomToken() {
+    const a = new Uint8Array(16);
+    crypto.getRandomValues(a);
+    return Array.from(a, b => ("0" + b.toString(16)).slice(-2)).join("");
+  },
+
+  decodeJwtPayload(t) {
+    try {
+      let s = String(t).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      while (s.length % 4) s += "=";
+      return JSON.parse(decodeURIComponent(escape(atob(s))));
+    } catch (e) { return null; }
+  },
+
+  // 手機：整頁導到 Google 登入，回來時網址 # 後帶 id_token
+  startGoogleRedirect() {
+    const cfg = this._loginCfg;
+    if (!cfg || !cfg.clientId) return;
+    const st = { state: this.randomToken(), nonce: this.randomToken() };
+    try {
+      sessionStorage.setItem("LEAVE_SYS_GOOGLE_AUTH", JSON.stringify(st));
+    } catch (e) {
+      this.showLoginError("瀏覽器封鎖了暫存空間，請關閉無痕模式後再試。");
+      return;
+    }
+    const params = new URLSearchParams({
+      client_id: cfg.clientId,
+      redirect_uri: location.origin + location.pathname.replace(/index\.html$/, ""), // 統一為資料夾網址，Google 只需登記一個
+      response_type: "id_token",
+      scope: "openid email profile",
+      nonce: st.nonce,
+      state: st.state,
+      prompt: "select_account"
+    });
+    location.href = "https://accounts.google.com/o/oauth2/v2/auth?" + params.toString();
+  },
+
+  async handleGoogleRedirectReturn() {
+    const h = location.hash.replace(/^#/, "");
+    const q = {};
+    h.split("&").forEach(kv => {
+      const i = kv.indexOf("=");
+      if (i > 0) q[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, " "));
+    });
+    let st = null;
+    try {
+      st = JSON.parse(sessionStorage.getItem("LEAVE_SYS_GOOGLE_AUTH") || "null");
+      sessionStorage.removeItem("LEAVE_SYS_GOOGLE_AUTH");
+    } catch (e) { st = null; }
+    history.replaceState(null, "", location.pathname + location.search);
+
+    if (q.error) {
+      this.showLoginError(q.error === "access_denied" ? "已取消登入。" : `登入失敗（${q.error}），請再試一次。`);
+      this.initGoogleLogin();
+      return;
+    }
+    const p = this.decodeJwtPayload(q.id_token || "");
+    if (!st || !p || q.state !== st.state || p.nonce !== st.nonce) {
+      this.showLoginError("登入驗證失敗，請重新登入。");
+      this.initGoogleLogin();
+      return;
+    }
+    await this.completeGoogleLogin(q.id_token);
+  },
+
+  async completeGoogleLogin(idToken) {
+    const area = document.getElementById("googleLoginArea");
+    if (area) area.innerHTML = `<p class="google-login-loading"><i class="fa-solid fa-spinner fa-spin"></i> 登入中...</p>`;
+    this.showLoginError("");
+    let res;
+    try {
+      res = await ApiService.callApi("googleLogin", { idToken });
+    } catch (e) {
+      res = { success: false, message: "無法連線，請檢查網路後再試一次。" };
+    }
+    if (res && res.success && res.user) {
+      await this.completeLogin(res);
+    } else {
+      this.showLoginError(res ? res.message : "登入失敗，請再試一次。");
+      this.initGoogleLogin();
     }
   },
 
@@ -265,6 +444,8 @@ const App = {
     }
     const errorBanner = document.getElementById("loginErrorBanner");
     if (errorBanner) errorBanner.style.display = "none";
+    try { if (window.google && google.accounts && google.accounts.id) google.accounts.id.disableAutoSelect(); } catch (e) {}
+    this.initGoogleLogin();
     this.showToast("您已安全登出系統。", "info");
   },
 
@@ -430,6 +611,11 @@ const App = {
       viewName = "dashboard";
     }
 
+    if (viewName === "accounts" && !this.canManageAccounts(user)) {
+      this.showToast("權限不足：帳號權限僅限超級使用者與管理者。", "error");
+      viewName = "dashboard";
+    }
+
     // 嚴格權限防護：人事差勤維護專區僅限 HR 與最高管理者 (Admin) 存取
     if (viewName === "hr-management" && !isHrOrAdmin) {
       this.showToast("權限不足：人事差勤維護專區僅限人事 (HR) 與管理者存取！", "error");
@@ -465,6 +651,7 @@ const App = {
       "approvals": { title: "審核簽核中心", sub: "支援主管與人資進行請假、銷假與加班換補休之審核" },
       "calendar": { title: "團隊差勤行事曆", sub: "檢視部門差勤分佈與 2026 國定假日排程" },
       "hr-management": { title: "人事差勤與特休額度管理", sub: "全員到職日維護、勞基法歷年制特休額度核算與法定特休同步" },
+      "accounts": { title: "帳號權限管理", sub: "以 Google 帳號 Email 開通、停用同仁的登入權限與角色" },
       "system-settings": { title: "系統後端與資料庫串接設定", sub: "管理 Google Apps Script Web App 雲端連線與資料庫路徑" },
       "settings": { title: "系統後端與資料庫串接設定", sub: "管理 Google Apps Script 雲端同步與資料庫路徑" }
     };
@@ -496,6 +683,9 @@ const App = {
         break;
       case "hr-management":
         this.renderHrManagement();
+        break;
+      case "accounts":
+        this.renderAccountsView();
         break;
       case "system-settings":
         this.renderSystemSettings();
@@ -591,6 +781,20 @@ const App = {
   renderDashboard() {
     const user = this.state.currentUser;
     const year = SYSTEM_CONFIG.CURRENT_YEAR;
+
+    // 超級使用者 / 管理者：帳號權限捷徑卡
+    const shortcut = document.getElementById("superAdminShortcut");
+    if (shortcut) {
+      const show = this.canManageAccounts(user);
+      shortcut.style.display = show ? "flex" : "none";
+      if (show) {
+        const all = this.state.users || [];
+        const disabled = all.filter(u => u.status === "disabled").length;
+        const neverLogin = all.filter(u => u.status !== "disabled" && !u.last_login_at).length;
+        const sum = document.getElementById("superAdminShortcutSummary");
+        if (sum) sum.textContent = `已開通 ${all.length - disabled} 人` + (disabled ? `、停用 ${disabled} 人` : "") + (neverLogin ? `、${neverLogin} 人尚未登入過` : "");
+      }
+    }
     
     // 渲染勞基法【歷年制】特休標準提示條 (每年 1/1 重新起算)
     const hireDate = user.hire_date ? LeaveEngine.formatDateOnly(user.hire_date) : "2024-03-01";
@@ -2486,6 +2690,163 @@ const App = {
     });
   },
 
+  // ======================== 帳號權限管理 ========================
+  canManageAccounts(user) {
+    if (!user) return false;
+    return !!user.isSuperAdmin || String(user.role || "").trim().toLowerCase() === "admin";
+  },
+
+  roleLabel(role) {
+    return ({ Employee: "一般同仁", Manager: "部門主管", HR: "人資", Admin: "管理者" })[role] || role || "--";
+  },
+
+  async renderAccountsView() {
+    const me = this.state.currentUser;
+    if (!this.canManageAccounts(me)) return;
+    const users = this.state.users || [];
+
+    // 新增表單：直屬主管選單、預設到職日
+    const mgrSel = document.getElementById("grantManager");
+    if (mgrSel && !mgrSel.dataset.filled) {
+      mgrSel.innerHTML = users.filter(u => u.status !== "disabled")
+        .map(u => `<option value="${esc(u.id)}" ${u.id === me.id ? "selected" : ""}>${esc(u.name)}（${esc(u.department_name || "")}）</option>`).join("");
+      mgrSel.dataset.filled = "1";
+    }
+    const hd = document.getElementById("grantHireDate");
+    if (hd && !hd.value) hd.value = LeaveEngine.formatDateOnly(new Date());
+
+    const q = (document.getElementById("accountsSearch") || {}).value || "";
+    const kw = q.trim().toLowerCase();
+    const list = users.filter(u => !kw || String(u.name || "").toLowerCase().includes(kw) || String(u.email || "").toLowerCase().includes(kw));
+    const countEl = document.getElementById("accountsCount");
+    if (countEl) countEl.textContent = users.length;
+
+    const tbody = document.getElementById("accountsTableBody");
+    if (!tbody) return;
+    const roles = ["Employee", "Manager", "HR", "Admin"];
+    tbody.innerHTML = list.map(u => {
+      const isSelf = u.id === me.id;
+      const disabled = u.status === "disabled";
+      const roleCell = (isSelf || u.isSuperAdmin)
+        ? `<span class="badge badge-blue">${esc(this.roleLabel(u.role))}</span>`
+        : `<select class="form-control account-role-select" onchange="App.changeAccountRole(${jsArg(u.id)}, this.value, this)">` +
+          roles.map(r => `<option value="${r}" ${u.role === r ? "selected" : ""}>${esc(this.roleLabel(r))}</option>`).join("") + `</select>`;
+      const statusCell = disabled
+        ? `<span class="badge badge-rejected">已停用</span>`
+        : `<span class="badge badge-approved">啟用中</span>`;
+      const actions = (isSelf || u.isSuperAdmin)
+        ? `<span style="font-size: 0.78rem; color: var(--text-muted);">${isSelf ? "本人" : "超級使用者"}</span>`
+        : `<button class="btn btn-sm btn-secondary" onclick="App.editAccountEmail(${jsArg(u.id)}, ${jsArg(u.email || "")}, ${jsArg(u.name)})"><i class="fa-solid fa-pen"></i> Email</button>
+           <button class="btn btn-sm btn-secondary" style="color: ${disabled ? "var(--success, #16a34a)" : "var(--danger)"};" onclick="App.toggleAccountStatus(${jsArg(u.id)}, ${jsArg(u.name)}, ${disabled ? "true" : "false"})">
+             <i class="fa-solid ${disabled ? "fa-user-check" : "fa-user-slash"}"></i> ${disabled ? "啟用" : "停用"}
+           </button>`;
+      return `<tr class="${disabled ? "account-row-disabled" : ""}">
+        <td><strong>${esc(u.name)}</strong> ${u.isSuperAdmin ? `<span class="badge badge-super">超級使用者</span>` : ""}<br><span style="font-size: 0.75rem; color: var(--text-muted);">${esc(u.id)}</span></td>
+        <td>${u.email ? esc(u.email) : `<span style="color: var(--danger);">未設定</span>`}</td>
+        <td>${esc(u.department_name || "")}</td>
+        <td>${roleCell}</td>
+        <td>${statusCell}</td>
+        <td style="font-size: 0.8rem;">${u.last_login_at ? esc(String(u.last_login_at).slice(0, 16)) : `<span style="color: var(--text-muted);">尚未登入</span>`}</td>
+        <td style="white-space: nowrap;">${actions}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 24px;">找不到符合的帳號</td></tr>`;
+
+    // 登入設定 (只有超級使用者可改)
+    const card = document.getElementById("loginSettingsCard");
+    if (card) card.style.display = me.isSuperAdmin ? "" : "none";
+    const cb = document.getElementById("settingPasswordLogin");
+    if (cb && me.isSuperAdmin) {
+      const cfg = await this.getLoginConfig();
+      cb.checked = !!cfg.passwordLogin;
+    }
+  },
+
+  async refreshAccounts(message) {
+    if (message) this.showToast(message, "success");
+    const mgrSel = document.getElementById("grantManager");
+    if (mgrSel) delete mgrSel.dataset.filled;
+    await this.loadData();
+    this.renderAccountsView();
+  },
+
+  async handleGrantAccess(event) {
+    if (event && event.preventDefault) event.preventDefault();
+    if (this.state.isSubmitting) return;
+    const email = document.getElementById("grantEmail").value.trim().toLowerCase();
+    const name = document.getElementById("grantName").value.trim();
+    if (!email || !name) return;
+    const btn = document.getElementById("btnGrantAccess");
+    this.state.isSubmitting = true;
+    if (btn) { btn.disabled = true; btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 開通中...`; }
+    try {
+      const res = await ApiService.callApi("adminCreateUser", {
+        email, name,
+        department_name: document.getElementById("grantDept").value,
+        role: document.getElementById("grantRole").value,
+        manager_id: document.getElementById("grantManager").value,
+        hire_date: document.getElementById("grantHireDate").value
+      });
+      if (res.success) {
+        document.getElementById("grantEmail").value = "";
+        document.getElementById("grantName").value = "";
+        if (res.tempPassword) alert(res.message);
+        await this.refreshAccounts(res.tempPassword ? "" : res.message);
+      } else {
+        this.showToast(res.message, "error");
+      }
+    } catch (err) {
+      this.showToast("開通失敗：" + (err.message || "網路異常"), "error");
+    } finally {
+      this.state.isSubmitting = false;
+      if (btn) { btn.disabled = false; btn.innerHTML = `<i class="fa-solid fa-user-check"></i> 開通權限`; }
+    }
+  },
+
+  async changeAccountRole(userId, role, selectEl) {
+    const u = (this.state.users || []).find(x => x.id === userId);
+    if (!u) return;
+    if (!confirm(`確定把 ${u.name} 的角色改為「${this.roleLabel(role)}」嗎？對方需要重新登入才會生效。`)) {
+      if (selectEl) selectEl.value = u.role;
+      return;
+    }
+    const res = await ApiService.callApi("adminUpdateUser", { id: userId, role });
+    if (res.success) await this.refreshAccounts(`${u.name} 的角色已改為「${this.roleLabel(role)}」。`);
+    else { this.showToast(res.message, "error"); if (selectEl) selectEl.value = u.role; }
+  },
+
+  async toggleAccountStatus(userId, name, enable) {
+    const msg = enable ? `確定重新啟用 ${name} 的帳號嗎？` : `確定停用 ${name} 的帳號嗎？停用後對方會立即被登出，資料與紀錄都會保留。`;
+    if (!confirm(msg)) return;
+    const res = await ApiService.callApi("adminUpdateUser", { id: userId, status: enable ? "active" : "disabled" });
+    if (res.success) await this.refreshAccounts(enable ? `已重新啟用 ${name}。` : `已停用 ${name}。`);
+    else this.showToast(res.message, "error");
+  },
+
+  async editAccountEmail(userId, currentEmail, name) {
+    const next = prompt(`請輸入 ${name} 的 Google 帳號 Email：`, currentEmail || "");
+    if (next === null) return;
+    const email = next.trim().toLowerCase();
+    if (!email || email === String(currentEmail).toLowerCase()) return;
+    const res = await ApiService.callApi("adminUpdateUser", { id: userId, email });
+    if (res.success) await this.refreshAccounts(`${name} 的登入 Email 已改為 ${email}。`);
+    else this.showToast(res.message, "error");
+  },
+
+  async togglePasswordLogin(enabled) {
+    if (!enabled && !confirm("關閉後，所有人只能用 Google 帳號登入。請確認大家都已用 Google 帳號登入過。確定關閉嗎？")) {
+      document.getElementById("settingPasswordLogin").checked = true;
+      return;
+    }
+    const res = await ApiService.callApi("setSystemSetting", { key: "passwordLoginEnabled", value: !!enabled });
+    if (res.success) {
+      if (this._loginCfg) this._loginCfg.passwordLogin = !!enabled;
+      this.showToast(res.message, "success");
+    } else {
+      this.showToast(res.message, "error");
+      document.getElementById("settingPasswordLogin").checked = !enabled;
+    }
+  },
+
   /**
    * 8. 系統後端與資料庫串接設定 (System Settings) - 嚴格限制僅限最高管理者 Admin
    */
@@ -2987,6 +3348,9 @@ const App = {
     }
 
     // 人事差勤維護選單：HR 與最高管理者 (Admin) 顯示
+    const navAccounts = document.getElementById("navAccounts");
+    if (navAccounts) navAccounts.style.display = this.canManageAccounts(user) ? "flex" : "none";
+
     const navHrManagement = document.getElementById("navHrManagement");
     if (navHrManagement) {
       navHrManagement.style.display = LeaveEngine.isUserAdmin(user) ? "flex" : "none";

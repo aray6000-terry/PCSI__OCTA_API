@@ -159,7 +159,7 @@ const ApiService = {
     ];
     const isMutation = MUTATION_ACTIONS.indexOf(action) !== -1;
     // 登入與異動操作在遠端模式下絕不可降級至本機 Mock (Mock 帳密為展示用，降級會造成假登入/假寫入)
-    const noMockFallback = isMutation || action === "login";
+    const noMockFallback = isMutation || action === "login" || action === "googleLogin" || action === "setSystemSetting";
 
     // 若啟用線上 Google Apps Script
     if (this.isUsingRemoteGas()) {

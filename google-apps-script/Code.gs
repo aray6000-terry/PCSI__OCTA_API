@@ -139,7 +139,146 @@ function findUserById_(ss, userId) {
 }
 
 function isAdminOrHR_(user) {
-  return !!user && (user.role === "Admin" || user.role === "HR");
+  return !!user && (user.role === "Admin" || user.role === "HR" || isSuperAdmin_(user));
+}
+
+// ======================== Google 帳號登入與超級使用者 ========================
+// 超級使用者：可開通 / 停用任何人的權限、指派任何角色。可在「指令碼屬性 SUPER_ADMIN_EMAILS」以逗號追加。
+const SUPER_ADMIN_EMAILS = ["aray6000@gmail.com"];
+
+function superAdminEmails_() {
+  const extra = PropertiesService.getScriptProperties().getProperty("SUPER_ADMIN_EMAILS") || "";
+  return SUPER_ADMIN_EMAILS.concat(extra.split(",")).map(e => String(e).trim().toLowerCase()).filter(Boolean);
+}
+
+function isSuperAdmin_(user) {
+  if (!user || !user.email) return false;
+  return superAdminEmails_().indexOf(String(user.email).trim().toLowerCase()) !== -1;
+}
+
+// 可管理角色與帳號 (指派 Admin/HR、停用、刪除、改 Email)
+function canManageAccounts_(user) {
+  return !!user && (user.role === "Admin" || isSuperAdmin_(user));
+}
+
+function isUserDisabled_(user) {
+  return !!user && String(user.status || "").trim().toLowerCase() === "disabled";
+}
+
+// Google OAuth Client ID：存在「指令碼屬性 GOOGLE_CLIENT_ID」
+function getGoogleClientId_() {
+  return PropertiesService.getScriptProperties().getProperty("GOOGLE_CLIENT_ID") || "";
+}
+
+// 過渡期是否仍允許帳號密碼登入 (預設允許；超級使用者可在權限頁關閉)
+function isPasswordLoginEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty("PASSWORD_LOGIN_ENABLED") !== "false";
+}
+
+// users 表補上 status / last_login_at 欄位 (舊表沒有時自動新增)
+function ensureUserColumns_(ss) {
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.USERS);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  ["status", "last_login_at"].forEach(col => {
+    if (headers.indexOf(col) === -1) {
+      headers.push(col);
+      sheet.getRange(1, headers.length).setValue(col);
+    }
+  });
+  return headers;
+}
+
+function setUserField_(ss, userId, field, value) {
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.USERS);
+  const data = sheet.getDataRange().getValues();
+  const idIdx = data[0].indexOf("id"), fIdx = data[0].indexOf(field);
+  if (fIdx === -1) return false;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]).trim() === String(userId).trim()) {
+      sheet.getRange(i + 1, fIdx + 1).setValue(value);
+      return true;
+    }
+  }
+  return false;
+}
+
+function publicUser_(u) {
+  return {
+    id: u.id, name: u.name, email: u.email,
+    department_id: u.department_id, department_name: u.department_name,
+    manager_id: u.manager_id, role: u.role, created_at: u.created_at,
+    isSuperAdmin: isSuperAdmin_(u)
+  };
+}
+
+/**
+ * 驗證 Google ID Token (向 Google 官方 tokeninfo 端點驗證簽章、對象、期限)，
+ * 再比對 users 表中已開通的 Email。未開通、停用者一律拒絕。
+ */
+function googleLogin(idToken) {
+  const clientId = getGoogleClientId_();
+  if (!clientId) return { success: false, message: "系統尚未設定 Google 登入，請聯絡管理員。" };
+  if (!idToken || typeof idToken !== "string" || idToken.length > 4096) {
+    return { success: false, message: "登入憑證無效，請重新登入。" };
+  }
+
+  let info;
+  try {
+    const res = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(idToken), { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return { success: false, message: "Google 登入驗證失敗，請重新登入。" };
+    info = JSON.parse(res.getContentText());
+  } catch (e) {
+    console.error(e && e.stack ? e.stack : e);
+    return { success: false, message: "無法連線 Google 驗證服務，請稍後再試。" };
+  }
+
+  const issOk = info.iss === "accounts.google.com" || info.iss === "https://accounts.google.com";
+  const notExpired = parseInt(info.exp, 10) * 1000 > Date.now();
+  const verified = info.email_verified === true || info.email_verified === "true";
+  if (info.aud !== clientId || !issOk || !notExpired || !verified || !info.email) {
+    return { success: false, message: "Google 登入驗證失敗，請重新登入。" };
+  }
+  const email = String(info.email).trim().toLowerCase();
+
+  const ss = getSpreadsheet();
+  ensureUserColumns_(ss);
+  let users = sheetToObjects(ss.getSheetByName(CONFIG.SHEETS.USERS));
+  let user = users.find(u => String(u.email || "").trim().toLowerCase() === email);
+
+  // 超級使用者第一次用 Google 登入：自動綁定到最高管理者 (老闆) 的帳號
+  if (!user && superAdminEmails_().indexOf(email) !== -1) {
+    const tops = users.filter(u => isTopAdmin_(u));
+    if (tops.length === 1) {
+      setUserField_(ss, tops[0].id, "email", email);
+      logApproval(ss, "ACCOUNT-" + tops[0].id, "ACCOUNT", tops[0].id, "System", "UPDATED", "超級使用者綁定 Google 帳號 " + email);
+      user = Object.assign({}, tops[0], { email: email });
+    }
+  }
+
+  if (!user) {
+    return { success: false, notProvisioned: true, message: `此 Google 帳號（${email}）尚未開通，請聯絡管理員。` };
+  }
+  if (isUserDisabled_(user)) {
+    return { success: false, message: "此帳號已停用，請聯絡管理員。" };
+  }
+
+  setUserField_(ss, user.id, "last_login_at", Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd HH:mm:ss"));
+  return {
+    success: true,
+    message: "登入成功",
+    token: createAuthToken(user.id, user.role),
+    user: publicUser_(user)
+  };
+}
+
+/** 超級使用者：系統設定 (目前僅「是否允許帳號密碼登入」) */
+function setSystemSetting(params) {
+  if (!isSuperAdmin_(params._me)) return { success: false, message: "僅超級使用者可變更系統設定。" };
+  if (params.key === "passwordLoginEnabled") {
+    PropertiesService.getScriptProperties().setProperty("PASSWORD_LOGIN_ENABLED", params.value ? "true" : "false");
+    return { success: true, message: params.value ? "已允許帳號密碼登入。" : "已關閉帳號密碼登入，之後只能用 Google 帳號登入。" };
+  }
+  return { success: false, message: "不支援的設定。" };
 }
 
 // ======================== 試算表存取核心 (支援 Google Sheet 容器綁定與 Library 程式庫模式) ========================
@@ -170,7 +309,7 @@ function doPost(e) {
 }
 
 // 不需登入即可呼叫的動作
-const PUBLIC_ACTIONS = { ping: true, login: true };
+const PUBLIC_ACTIONS = { ping: true, login: true, googleLogin: true };
 // 僅 Admin / HR 可呼叫的動作
 const ADMIN_ACTIONS = {
   adminUpdateBalance: true, adminUpdateUser: true, adminCreateUser: true, adminDeleteUser: true,
@@ -199,8 +338,8 @@ function handleRequest(e) {
       const tokenPayload = verifyAuthToken(params.token);
       const ss = getSpreadsheet();
       me = tokenPayload ? findUserById_(ss, tokenPayload.userId) : null;
-      if (!me) {
-        output.setContent(JSON.stringify({ success: false, authError: true, message: "登入已逾時或無效，請重新登入。" }));
+      if (!me || isUserDisabled_(me)) {
+        output.setContent(JSON.stringify({ success: false, authError: true, message: me ? "此帳號已停用，請聯絡管理員。" : "登入已逾時或無效，請重新登入。" }));
         return output;
       }
       if (ADMIN_ACTIONS[action] && !isAdminOrHR_(me)) {
@@ -214,7 +353,10 @@ function handleRequest(e) {
 
     switch (action) {
       case "ping":
-        result = { success: true, apiVersion: "20261106_V8", message: "Leave System API is online.", timestamp: new Date().toISOString() };
+        result = {
+          success: true, apiVersion: "20261119_V9", message: "Leave System API is online.", timestamp: new Date().toISOString(),
+          googleClientId: getGoogleClientId_(), passwordLoginEnabled: isPasswordLoginEnabled_()
+        };
         break;
 
       // initDatabase 已自 Web API 移除：只能由管理員在 Apps Script 編輯器中手動執行。
@@ -224,7 +366,17 @@ function handleRequest(e) {
         break;
 
       case "login":
-        result = loginUser(params.email, params.password);
+        result = isPasswordLoginEnabled_()
+          ? loginUser(params.email, params.password)
+          : { success: false, message: "已停用帳號密碼登入，請使用 Google 帳號登入。" };
+        break;
+
+      case "googleLogin":
+        result = googleLogin(params.idToken);
+        break;
+
+      case "setSystemSetting":
+        result = setSystemSetting(params);
         break;
 
       case "calculateHours":
@@ -953,17 +1105,29 @@ function getBootstrapData(currentUserId, authToken, shouldSync) {
   }
 
   // 1. 嚴格過濾：currentUser 物件徹底清除敏感密碼欄位
-  const safeCurrentUser = currentUser ? Object.assign({}, currentUser, { password_hash: undefined }) : null;
+  const safeCurrentUser = currentUser ? Object.assign({}, currentUser, { password_hash: undefined, isSuperAdmin: isSuperAdmin_(currentUser) }) : null;
+  const seesAccounts = isAdminOrHR_(currentUser);
 
   // 2. 通訊錄過濾：移除 password_hash、hire_date 等隱私欄位，保留選單必要屬性
-  const safeUsers = users.map(u => ({
-    id: u.id,
-    name: u.name,
-    department_id: u.department_id,
-    department_name: u.department_name,
-    manager_id: u.manager_id,
-    role: u.role
-  }));
+  const safeUsers = users.map(u => {
+    const base = {
+      id: u.id,
+      name: u.name,
+      department_id: u.department_id,
+      department_name: u.department_name,
+      manager_id: u.manager_id,
+      role: u.role
+    };
+    // 人資 / 管理者 / 超級使用者：另外看得到 Email、到職日、帳號狀態與最後登入 (帳號權限管理用)
+    if (seesAccounts) {
+      Object.assign(base, {
+        email: u.email, hire_date: u.hire_date,
+        status: String(u.status || "").trim().toLowerCase() === "disabled" ? "disabled" : "active",
+        last_login_at: u.last_login_at || "", isSuperAdmin: isSuperAdmin_(u)
+      });
+    }
+    return base;
+  });
 
   // 3. 依角色範圍過濾 (RBAC Scoping)，防止一般員工透過 API 或 DevTools 窺探全公司差勤隱私
   const userRole = currentUser ? currentUser.role : "Employee";
@@ -972,7 +1136,7 @@ function getBootstrapData(currentUserId, authToken, shouldSync) {
   let scopedOvertimes = [];
   let scopedLogs = [];
 
-  if (userRole === "Admin" || userRole === "HR") {
+  if (userRole === "Admin" || userRole === "HR" || isSuperAdmin_(currentUser)) {
     // HR 與最高管理員：可查全公司差勤紀錄
     scopedBalances = balances;
     scopedRequests = requests;
@@ -1064,6 +1228,10 @@ function loginUser(email, password) {
     if (String(data[i][emailIdx] || "").trim().toLowerCase() === inputEmail) { rowIndex = i; break; }
   }
 
+  const statusIdx = headers.indexOf("status");
+  if (rowIndex !== -1 && statusIdx !== -1 && String(data[rowIndex][statusIdx]).trim().toLowerCase() === "disabled") {
+    return { success: false, message: "此帳號已停用，請聯絡管理員。" };
+  }
   if (rowIndex === -1 || !verifyPassword_(inputPass, data[rowIndex][passIdx])) {
     cache.put(failKey, String(fails + 1), LOGIN_LOCK_SECONDS);
     return { success: false, message: "帳號或密碼錯誤，請重新確認輸入。" };
@@ -2146,11 +2314,22 @@ function adminUpdateBalance(params) {
 }
 
 function adminUpdateUser(params) {
-  const { id, name, department_name, manager_id, role, hire_date } = params;
+  const { id, name, department_name, manager_id, role, hire_date, email, status } = params;
   const me = params._me;
   const VALID_ROLES = ["Employee", "Manager", "HR", "Admin"];
   if (role && VALID_ROLES.indexOf(role) === -1) return { success: false, message: "無效的角色。" };
-  if (role && (!me || me.role !== "Admin")) return { success: false, message: "僅系統管理員可變更角色權限。" };
+  if ((role || email !== undefined || status !== undefined) && !canManageAccounts_(me)) {
+    return { success: false, message: "僅超級使用者或系統管理員可變更角色、Email 與帳號狀態。" };
+  }
+  if (me && String(id).trim() === me.id && (status === "disabled" || (role && role !== me.role))) {
+    return { success: false, message: "不能停用自己或變更自己的角色。" };
+  }
+  if (status !== undefined && ["active", "disabled"].indexOf(status) === -1) return { success: false, message: "無效的帳號狀態。" };
+  let newEmail = null;
+  if (email !== undefined) {
+    newEmail = String(email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return { success: false, message: "Email 格式不正確。" };
+  }
   if (manager_id && manager_id === id) return { success: false, message: "員工的直屬主管不能是自己。" };
   const ss = getSpreadsheet();
   const userSheet = ss.getSheetByName(CONFIG.SHEETS.USERS);
@@ -2169,8 +2348,31 @@ function adminUpdateUser(params) {
     hireIdx = headers.length;
   }
 
+  const ssCols = ensureUserColumns_(ss);
+  const emailIdx = ssCols.indexOf("email"), statusIdx = ssCols.indexOf("status");
+  if (newEmail) {
+    const dup = userData.slice(1).find(r => String(r[emailIdx]).trim().toLowerCase() === newEmail && r[idIdx] !== id);
+    if (dup) return { success: false, message: `Email ${newEmail} 已被 ${dup[nameIdx]} 使用。` };
+  }
+
   for (let i = 1; i < userData.length; i++) {
     if (userData[i][idIdx] === id) {
+      if (newEmail) userSheet.getRange(i + 1, emailIdx + 1).setValue(newEmail);
+      if (status !== undefined) {
+        userSheet.getRange(i + 1, statusIdx + 1).setValue(status);
+        if (status === "disabled") bumpTokenVersion_(id); // 停用後立即踢出所有裝置
+      }
+      if (role) {
+        if (role !== userData[i][roleIdx]) bumpTokenVersion_(id); // 角色變更後需重新登入
+        userSheet.getRange(i + 1, roleIdx + 1).setValue(role);
+      }
+      if (newEmail || status !== undefined || role) {
+        logApproval(ss, "ACCOUNT-" + id, "ACCOUNT", me.id, isSuperAdmin_(me) ? "Super Admin" : "Admin", "UPDATED",
+          [newEmail ? "Email→" + newEmail : "", status !== undefined ? "狀態→" + status : "", role ? "角色→" + role : ""].filter(Boolean).join("、"));
+      }
+      if (!name && !department_name && manager_id === undefined && !hire_date) {
+        return { success: true, message: "帳號權限已更新。" };
+      }
       if (name) userSheet.getRange(i + 1, nameIdx + 1).setValue(name);
       if (department_name) userSheet.getRange(i + 1, deptIdx + 1).setValue(department_name);
       if (manager_id !== undefined) userSheet.getRange(i + 1, mgrIdx + 1).setValue(manager_id);
@@ -2191,8 +2393,11 @@ function adminUpdateUser(params) {
 function adminCreateUser(params) {
   const { id, name, email, password, department_id, department_name, manager_id, role, hire_date } = params;
   const me = params._me;
-  if (role && role !== "Employee" && (!me || me.role !== "Admin")) {
-    return { success: false, message: "僅系統管理員可建立非一般員工角色的帳號。" };
+  if (role && role !== "Employee" && !canManageAccounts_(me)) {
+    return { success: false, message: "僅超級使用者或系統管理員可開通主管、人資或管理者權限。" };
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim())) {
+    return { success: false, message: "請輸入正確的 Email（需為可登入 Google 的帳號）。" };
   }
   if (!name || !email) {
     return { success: false, message: "請務必填寫員工姓名與電子信箱！" };
@@ -2221,16 +2426,16 @@ function adminCreateUser(params) {
     return { success: false, message: `Email: ${email} 已存在於系統中，請勿重複新增！` };
   }
 
-  // 不再使用固定預設密碼：未指定時產生隨機臨時密碼，只在本次回應顯示一次
+  // 以 Google 帳號登入為主：只有在仍允許密碼登入時，才產生臨時密碼 (只顯示這一次)
   let tempPassword = null;
   let plainPassword = password ? String(password) : "";
   if (plainPassword) {
     const pwErr = validateNewPassword_(plainPassword);
     if (pwErr) return { success: false, message: "初始密碼不符規則：" + pwErr };
-  } else {
+  } else if (isPasswordLoginEnabled_()) {
     plainPassword = tempPassword = generateTempPassword_();
   }
-  const passwordHash = hashPassword_(plainPassword);
+  const passwordHash = plainPassword ? hashPassword_(plainPassword) : "";
   const deptMap = {
     "研發部": "DEPT_RD",
     "設計部": "DEPT_DESIGN",
@@ -2244,7 +2449,8 @@ function adminCreateUser(params) {
   };
   const deptName = department_name || "研發部";
   const deptId = department_id || deptMap[deptName] || "DEPT_RD";
-  const mgrId = manager_id || "EMP002";
+  const topAdmin = sheetToObjects(userSheet).find(u => isTopAdmin_(u));
+  const mgrId = manager_id || (topAdmin ? topAdmin.id : "");
   const userRole = role || "Employee";
   const hireDateVal = hire_date || Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd");
   const createdAt = Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd HH:mm:ss");
@@ -2262,7 +2468,8 @@ function adminCreateUser(params) {
     switch (col) {
       case "id": newRow[idx] = newId; break;
       case "name": newRow[idx] = name; break;
-      case "email": newRow[idx] = email; break;
+      case "email": newRow[idx] = String(email).trim().toLowerCase(); break;
+      case "status": newRow[idx] = "active"; break;
       case "password_hash": newRow[idx] = passwordHash; break;
       case "department_id": newRow[idx] = deptId; break;
       case "department_name": newRow[idx] = deptName; break;
@@ -2295,8 +2502,8 @@ function adminCreateUser(params) {
 
   return {
     success: true,
-    message: `員工 ${name} (${newId}) 已成功新增！系統已自動依勞基法核發特休 ${annualHours} 小時並初始化事病假額度。` +
-      (tempPassword ? ` 臨時密碼：${tempPassword}（僅顯示這一次，請轉交本人並要求登入後立即修改）` : ""),
+    message: `已開通 ${name} (${newId})，請本人用 ${String(email).trim().toLowerCase()} 的 Google 帳號登入。特休已依勞基法核發 ${annualHours} 小時。` +
+      (tempPassword ? ` 過渡期臨時密碼：${tempPassword}（僅顯示這一次）` : ""),
     tempPassword: tempPassword,
     user: {
       id: newId,
@@ -2319,8 +2526,8 @@ function adminDeleteUser(params) {
   if (params._me && String(id).trim() === params._me.id) {
     return { success: false, message: "不能刪除自己的帳號。" };
   }
-  if (!params._me || params._me.role !== "Admin") {
-    return { success: false, message: "僅系統管理員可刪除員工帳號。" };
+  if (!canManageAccounts_(params._me)) {
+    return { success: false, message: "僅超級使用者或系統管理員可刪除員工帳號。" };
   }
   bumpTokenVersion_(String(id).trim());
 

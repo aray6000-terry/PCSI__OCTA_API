@@ -3,7 +3,10 @@
  */
 const SYSTEM_CONFIG = {
   // 前端版本號：每次更新前端時一併修改 (顯示於頁面最下方)
-  APP_VERSION: "V8 · 2026-11-06",
+  APP_VERSION: "V9 · 2026-11-19",
+
+  // Google 帳號登入的 OAuth Client ID。可留空：系統會改讀後端「指令碼屬性 GOOGLE_CLIENT_ID」。
+  GOOGLE_CLIENT_ID: "",
 
   // 標準工時設定 (08:30 - 18:00，午休 12:00 - 13:30 扣 1.5h，每日標準工時 8h)
   WORK_START: "08:30",

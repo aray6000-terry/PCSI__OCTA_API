@@ -15,6 +15,7 @@
   
   <!-- 核心樣式 -->
   <link rel="stylesheet" href="css/style.css?v=20261008_1">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <!-- ==================== 全域資料讀取與身分驗證載入畫面 (Global Loading Screen) ==================== -->
@@ -39,47 +40,62 @@
           <i class="fa-solid fa-calendar-check"></i>
         </div>
         <h2>請假與補休管理系統</h2>
-        <p>請登入您的員工或主管帳號以繼續</p>
+        <p>請使用公司開通的 Google 帳號登入</p>
       </div>
 
       <!-- 登入錯誤警示條 -->
       <div class="login-error-banner" id="loginErrorBanner">
         <i class="fa-solid fa-circle-exclamation"></i>
-        <span id="loginErrorMsg">帳號或密碼錯誤，請重新輸入。</span>
+        <span id="loginErrorMsg"></span>
       </div>
 
+      <!-- Google 帳號登入 (電腦顯示 Google 按鈕；手機改用整頁登入) -->
+      <div class="google-login-area" id="googleLoginArea">
+        <p class="google-login-loading"><i class="fa-solid fa-spinner fa-spin"></i> 載入 Google 登入中...</p>
+      </div>
+
+      <ul class="login-notes">
+        <li>本系統不會取得您的 Google 密碼，也不會存取您的信箱或雲端硬碟。</li>
+        <li>帳號需由管理員以 Email 開通。</li>
+        <li>公用電腦使用後請按「登出」。</li>
+      </ul>
+
+      <!-- 過渡期：帳號密碼登入 (超級使用者可在「帳號權限」頁關閉) -->
+      <details class="password-login-section" id="passwordLoginSection" hidden>
+        <summary>使用帳號密碼登入（過渡期）</summary>
       <!-- 登入表單 -->
-      <form class="login-form" id="loginForm" onsubmit="App.handleLogin(event)">
-        <div class="form-group">
-          <label class="form-label">電子信箱 (Email) <span class="req-star">*</span></label>
-          <div class="input-icon-wrap">
-            <i class="fa-solid fa-envelope prefix-icon"></i>
-            <input type="email" class="form-control" id="loginEmail" placeholder="請輸入公司電子信箱 (如 employee@company.com)" required>
+        <form class="login-form" id="loginForm" onsubmit="App.handleLogin(event)">
+          <div class="form-group">
+            <label class="form-label">電子信箱 (Email) <span class="req-star">*</span></label>
+            <div class="input-icon-wrap">
+              <i class="fa-solid fa-envelope prefix-icon"></i>
+              <input type="email" class="form-control" id="loginEmail" placeholder="請輸入公司電子信箱 (如 employee@company.com)" required>
+            </div>
           </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">登入密碼 <span class="req-star">*</span></label>
-          <div class="input-icon-wrap">
-            <i class="fa-solid fa-lock prefix-icon"></i>
-            <input type="password" class="form-control" id="loginPassword" placeholder="請輸入密碼" required>
-            <button type="button" class="toggle-password-btn" onclick="App.togglePasswordVisibility('loginPassword', this)">
-              <i class="fa-solid fa-eye-slash"></i>
-            </button>
+  
+          <div class="form-group">
+            <label class="form-label">登入密碼 <span class="req-star">*</span></label>
+            <div class="input-icon-wrap">
+              <i class="fa-solid fa-lock prefix-icon"></i>
+              <input type="password" class="form-control" id="loginPassword" placeholder="請輸入密碼" required>
+              <button type="button" class="toggle-password-btn" onclick="App.togglePasswordVisibility('loginPassword', this)">
+                <i class="fa-solid fa-eye-slash"></i>
+              </button>
+            </div>
           </div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--text-muted);">
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-            <input type="checkbox" id="rememberMeCheckbox" checked> 保持登入狀態
-          </label>
-          <span style="color: var(--primary); cursor: pointer;" onclick="App.showToast('若忘記密碼，請洽詢人事管理員 (HR) 進行重設。', 'info')">忘記密碼？</span>
-        </div>
-
-        <button type="submit" class="btn btn-primary btn-login" id="btnLoginSubmit">
-          <i class="fa-solid fa-right-to-bracket"></i> 登入系統
-        </button>
-      </form>
+  
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--text-muted);">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="rememberMeCheckbox" checked> 保持登入狀態
+            </label>
+            <span style="color: var(--primary); cursor: pointer;" onclick="App.showToast('若忘記密碼，請洽詢人事管理員 (HR) 進行重設。', 'info')">忘記密碼？</span>
+          </div>
+  
+          <button type="submit" class="btn btn-primary btn-login" id="btnLoginSubmit">
+            <i class="fa-solid fa-right-to-bracket"></i> 登入系統
+          </button>
+        </form>
+      </details>
     </div>
   </div>
 
@@ -129,6 +145,10 @@
         <a class="nav-item" data-view="hr-management" id="navHrManagement" style="display: none;">
           <i class="fa-solid fa-users-gear"></i>
           <span>人事差勤維護</span>
+        </a>
+        <a class="nav-item" data-view="accounts" id="navAccounts" style="display: none;">
+          <i class="fa-solid fa-user-shield"></i>
+          <span>帳號權限</span>
         </a>
         <a class="nav-item" data-view="system-settings" id="navSystemSettings" style="display: none;">
           <i class="fa-solid fa-server"></i>
@@ -191,6 +211,19 @@
 
         <!-- ==================== 1. 儀表板視圖 (Dashboard) ==================== -->
         <section class="view-section active" id="view-dashboard">
+          <!-- 超級使用者：帳號權限捷徑 -->
+          <div class="super-admin-card" id="superAdminShortcut" style="display: none;">
+            <div class="super-admin-card-text">
+              <i class="fa-solid fa-user-shield"></i>
+              <div>
+                <strong>帳號權限管理</strong>
+                <span id="superAdminShortcutSummary">--</span>
+              </div>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" onclick="App.navigate('accounts')">
+              <i class="fa-solid fa-user-plus"></i> 以 Email 開通權限
+            </button>
+          </div>
           <div class="dashboard-hero">
             <div class="hero-welcome">
               <h3>早安，<span id="heroUserName">--</span> 👋</h3>
@@ -911,6 +944,89 @@
                   </tbody>
                 </table>
               </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ==================== 帳號權限管理 (超級使用者 / 管理者) ==================== -->
+        <section class="view-section" id="view-accounts">
+          <div style="display: flex; flex-direction: column; gap: 24px; max-width: 1080px; margin: 0 auto;">
+
+            <div class="form-card" style="max-width: 100%;">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-envelope-circle-check" style="color: var(--primary);"></i> 以 Email 開通權限</div>
+              </div>
+              <p class="accounts-help">輸入同仁的 Google 帳號 Email 並選擇角色。開通後，本人用該 Google 帳號登入即可使用；不需要設定密碼。</p>
+              <form id="grantAccessForm" class="grant-form" onsubmit="App.handleGrantAccess(event)">
+                <div class="form-group">
+                  <label class="form-label">Google 帳號 Email <span class="req-star">*</span></label>
+                  <input type="email" class="form-control" id="grantEmail" required placeholder="name@gmail.com 或公司 Google Workspace 帳號">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">姓名 <span class="req-star">*</span></label>
+                  <input type="text" class="form-control" id="grantName" required placeholder="王小明">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">部門</label>
+                  <select class="form-control" id="grantDept">
+                    <option>工程部</option><option>研發部</option><option>業務部</option><option>管理部</option><option>人資部</option><option>財務部</option><option>維修部</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">角色</label>
+                  <select class="form-control" id="grantRole">
+                    <option value="Employee">一般同仁</option>
+                    <option value="Manager">部門主管</option>
+                    <option value="HR">人資</option>
+                    <option value="Admin">管理者</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">直屬主管</label>
+                  <select class="form-control" id="grantManager"></select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">到職日</label>
+                  <input type="date" class="form-control" id="grantHireDate">
+                </div>
+                <div class="grant-form-actions">
+                  <button type="submit" class="btn btn-primary" id="btnGrantAccess"><i class="fa-solid fa-user-check"></i> 開通權限</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="form-card" style="max-width: 100%;">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-users" style="color: var(--primary);"></i> 已開通帳號 <span class="badge badge-blue" id="accountsCount">0</span></div>
+                <input type="search" class="form-control accounts-search" id="accountsSearch" placeholder="搜尋姓名或 Email" oninput="App.renderAccountsView()">
+              </div>
+              <div class="table-responsive">
+                <table class="custom-table">
+                  <thead>
+                    <tr>
+                      <th>姓名</th>
+                      <th>Google 帳號 Email</th>
+                      <th>部門</th>
+                      <th>角色</th>
+                      <th>狀態</th>
+                      <th>最後登入</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="accountsTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="form-card" style="max-width: 100%;" id="loginSettingsCard">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-key" style="color: var(--primary);"></i> 登入設定</div>
+              </div>
+              <label class="login-setting-row">
+                <input type="checkbox" id="settingPasswordLogin" onchange="App.togglePasswordLogin(this.checked)">
+                <span>過渡期仍允許「帳號密碼登入」。全員都改用 Google 帳號登入後，建議關閉。</span>
+              </label>
             </div>
 
           </div>

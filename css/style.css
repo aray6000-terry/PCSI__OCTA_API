@@ -1191,7 +1191,7 @@ button:disabled,
 }
 
 /* ======================== 響應式斷點 (Media Queries) ======================== */
-@layer mobile {
+/* (原本包在 @layer mobile 內：圖層優先序低於一般樣式，導致手機版版面規則全部失效，已移除) */
   @media (max-width: 1024px) {
     .dashboard-content-grid {
       grid-template-columns: 1fr;
@@ -1231,7 +1231,6 @@ button:disabled,
       display: none;
     }
   }
-}
 
 /* ======================== 登入畫面樣式 (Auth & Login Screen) ======================== */
 .login-overlay {
@@ -1558,3 +1557,39 @@ tr.bulk-selected td { background: var(--primary-light); }
 .app-version-footer strong { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
 .app-version-footer .sep { opacity: 0.5; }
 @media (max-width: 768px) { .app-version-footer { padding-bottom: 84px; } }
+
+/* ===== Google 登入 ===== */
+.google-login-area { display: flex; flex-direction: column; align-items: center; gap: 10px; min-height: 64px; margin: 8px 0 4px; }
+.google-login-loading, .login-hint { font-size: 0.85rem; color: var(--text-muted); text-align: center; }
+.login-hint a { color: var(--primary); text-decoration: underline; }
+.btn-google { width: 100%; max-width: 300px; justify-content: center; gap: 10px; padding: 12px 18px; border-radius: 999px;
+  background: #fff; color: #1f1f1f; border: 1px solid #747775; font-weight: 600; font-size: 0.95rem; }
+.btn-google .fa-google { color: #4285f4; }
+.login-notes { margin: 14px 0 0; padding-left: 18px; font-size: 0.78rem; color: var(--text-muted); line-height: 1.7; }
+.password-login-section { margin-top: 16px; border-top: 1px dashed var(--border-color); padding-top: 12px; }
+.password-login-section > summary { cursor: pointer; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px; }
+
+/* ===== 帳號權限 ===== */
+.super-admin-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 14px 18px; margin-bottom: 20px; border-radius: var(--radius-lg);
+  background: var(--primary-light); border: 1px solid #c7d2fe; }
+.super-admin-card-text { display: flex; align-items: center; gap: 12px; }
+.super-admin-card-text > i { font-size: 1.4rem; color: var(--primary); }
+.super-admin-card-text strong { display: block; font-size: 0.95rem; }
+.super-admin-card-text span { font-size: 0.8rem; color: var(--text-muted); }
+.accounts-help { font-size: 0.85rem; color: var(--text-muted); margin: -6px 0 16px; }
+.grant-form { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 16px; }
+.grant-form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+.accounts-search { max-width: 220px; }
+.account-row-disabled td { opacity: 0.55; }
+.account-role-select { padding: 4px 8px; font-size: 0.85rem; min-width: 110px; }
+.badge-super { background: #fef3c7; color: #92400e; }
+.login-setting-row { display: flex; align-items: flex-start; gap: 10px; font-size: 0.9rem; cursor: pointer; }
+.login-setting-row input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--primary); }
+@media (max-width: 768px) {
+  .grant-form { grid-template-columns: 1fr; }
+  .accounts-search { max-width: 100%; width: 100%; }
+}
+#view-accounts .form-card { width: 100%; box-sizing: border-box; }
+#accountsTableBody td { white-space: nowrap; }
+#accountsTableBody td:first-child { white-space: normal; min-width: 7em; }
