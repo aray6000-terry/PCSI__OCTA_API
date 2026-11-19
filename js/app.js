@@ -255,6 +255,13 @@ const App = {
     const cfg = await this.getLoginConfig();
     const pw = document.getElementById("passwordLoginSection");
     if (pw) pw.hidden = !cfg.passwordLogin;
+    // Google 登入還不能用時 (未設定 / 展示模式)：直接顯示帳號密碼表單，不留空白
+    const card = document.querySelector("#loginScreen .login-card");
+    const googleReady = ApiService.isUsingRemoteGas() && !!cfg.clientId;
+    if (card) card.classList.toggle("no-google", !googleReady);
+    const sub = document.querySelector("#loginScreen .login-header p");
+    if (sub) sub.textContent = googleReady ? "請使用公司開通的 Google 帳號登入" : "請輸入帳號密碼登入";
+    if (!googleReady && pw) { pw.hidden = false; pw.open = true; }
 
     if (this.isInAppBrowser()) {
       this.showLoginError("您正在 App 內建的瀏覽器中（例如 LINE），Google 可能不允許在這裡登入。請按右上角「⋯」選「用瀏覽器開啟」（Safari 或 Chrome）。");
@@ -3150,6 +3157,20 @@ const App = {
     if (!this.canManageAccounts(me)) return;
     const users = this.state.users || [];
 
+    // 後端還是舊版時，不會回傳 Email / 帳號狀態：直接提示，不要每列都顯示「未設定」
+    const backendReady = users.some(u => Object.prototype.hasOwnProperty.call(u, "email"));
+    let notice = document.getElementById("accountsBackendNotice");
+    if (!notice) {
+      notice = document.createElement("div");
+      notice.id = "accountsBackendNotice";
+      notice.className = "accounts-backend-notice";
+      const wrap = document.querySelector("#view-accounts > div");
+      if (wrap) wrap.prepend(notice);
+    }
+    notice.hidden = backendReady;
+    notice.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> 後端尚未更新（目前 ${esc(ApiService._remoteApiVersion || "舊版")}），所以看不到 Email 與帳號狀態，也還不能開通權限。請在 Apps Script 貼上新的 Code.gs 後，到「部署 → 管理部署作業 → 編輯 → 版本選『新版本』→ 部署」。`;
+    document.querySelectorAll("#grantAccessForm input, #grantAccessForm select, #grantAccessForm button").forEach(el => { el.disabled = !backendReady; });
+
     // 新增表單：直屬主管選單、預設到職日
     const mgrSel = document.getElementById("grantManager");
     if (mgrSel && !mgrSel.dataset.filled) {
@@ -3187,7 +3208,7 @@ const App = {
            </button>`;
       return `<tr class="${disabled ? "account-row-disabled" : ""}">
         <td><strong>${esc(u.name)}</strong> ${u.isSuperAdmin ? `<span class="badge badge-super">超級使用者</span>` : ""}<br><span style="font-size: 0.75rem; color: var(--text-muted);">${esc(u.id)}</span></td>
-        <td>${u.email ? esc(u.email) : `<span style="color: var(--danger);">未設定</span>`}</td>
+        <td>${u.email ? esc(u.email) : (backendReady ? `<span style="color: var(--danger);">未設定</span>` : `<span style="color: var(--text-muted);">—</span>`)}</td>
         <td>${esc(u.department_name || "")}</td>
         <td>${roleCell}</td>
         <td>${statusCell}</td>

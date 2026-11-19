@@ -1676,3 +1676,12 @@ tr.bulk-selected td { background: var(--primary-light); }
   .att-stat b { font-size: 1.1rem; }
   .att-stat span { font-size: 0.7rem; }
 }
+
+/* 登入頁：Google 登入尚未可用時，直接顯示密碼表單 */
+.login-card.no-google .google-login-area,
+.login-card.no-google .login-notes,
+.login-card.no-google .password-login-section > summary { display: none; }
+.login-card.no-google .password-login-section { margin-top: 8px; border-top: none; padding-top: 0; }
+.google-login-area { min-height: 0; }
+.accounts-backend-notice { padding: 12px 16px; border-radius: var(--radius-md); background: #fffbeb; border: 1px solid #fcd34d;
+  color: #92400e; font-size: 0.88rem; line-height: 1.6; }
