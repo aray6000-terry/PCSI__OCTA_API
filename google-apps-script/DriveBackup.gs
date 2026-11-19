@@ -63,8 +63,20 @@ function backupLatestToDrive() {
 }
 
 // ---------------------------------------------------------------
-// 說明：不使用 api.github.com (Apps Script 共用 IP，匿名額度常被其他人用完而出現 403)，
-// 改用 GitHub 公開的 commit 動態 (Atom) 與原始碼壓縮檔下載連結，不受 API 次數限制。
+// repo 已改為「私人」：需要一把唯讀的 GitHub 存取權杖 (Fine-grained token，只給 USB_OCTA_API 的 Contents: Read-only)，
+// 存在「指令碼屬性」GITHUB_TOKEN。帶權杖時每小時有 5000 次額度，不會再遇到匿名 403。
+// 若沒有權杖、repo 又是公開的，會自動改用公開連結。
+
+function githubToken_() {
+  return PropertiesService.getScriptProperties().getProperty("GITHUB_TOKEN") || "";
+}
+
+function githubFetch_(url, accept) {
+  const token = githubToken_();
+  const headers = { "User-Agent": "leave-system-drive-backup", "Accept": accept || "application/vnd.github+json" };
+  if (token) headers.Authorization = "Bearer " + token;
+  return UrlFetchApp.fetch(url, { headers: headers, muteHttpExceptions: true, followRedirects: true });
+}
 
 function backupCommitToDrive_(ref) {
   const commits = listRecentCommits_();
@@ -77,10 +89,12 @@ function backupCommitToDrive_(ref) {
   if (done) return `略過 ${short}：已經備份過`;
 
   // 下載該版本完整原始碼 zip
-  const zipUrl = `https://codeload.github.com/${BACKUP_CONFIG.OWNER}/${BACKUP_CONFIG.REPO}/zip/${commit.sha}`;
-  const res = UrlFetchApp.fetch(zipUrl, { muteHttpExceptions: true, followRedirects: true });
+  const zipUrl = githubToken_()
+    ? `https://api.github.com/repos/${BACKUP_CONFIG.OWNER}/${BACKUP_CONFIG.REPO}/zipball/${commit.sha}`
+    : `https://codeload.github.com/${BACKUP_CONFIG.OWNER}/${BACKUP_CONFIG.REPO}/zip/${commit.sha}`;
+  const res = githubFetch_(zipUrl);
   if (res.getResponseCode() !== 200) {
-    throw new Error(`下載原始碼失敗 (HTTP ${res.getResponseCode()})。若 repo 已改為 Private，需改用 GitHub Token。`);
+    throw new Error(`下載原始碼失敗 (HTTP ${res.getResponseCode()})。repo 為私人時，請在指令碼屬性設定 GITHUB_TOKEN。`);
   }
   const zipBlob = res.getBlob().setName(`原始碼_${short}.zip`).setContentType("application/zip");
 
@@ -116,8 +130,17 @@ function backupCommitToDrive_(ref) {
   return `已備份 ${version} ${short}「${note}」共 ${count} 個檔案 → ${folderName}`;
 }
 
-// 讀取 GitHub 公開的 commit 動態 (最新在前，最多 20 筆)
+// 讀取最近 20 個版本 (最新在前)：有權杖用 GitHub API，否則用公開的 commit 動態
 function listRecentCommits_() {
+  if (githubToken_()) {
+    const res = githubFetch_(`https://api.github.com/repos/${BACKUP_CONFIG.OWNER}/${BACKUP_CONFIG.REPO}/commits?sha=${BACKUP_CONFIG.BRANCH}&per_page=20`);
+    if (res.getResponseCode() !== 200) throw new Error(`讀取 GitHub 版本清單失敗 (HTTP ${res.getResponseCode()})，請確認 GITHUB_TOKEN 是否有效。`);
+    return JSON.parse(res.getContentText()).map(c => ({
+      sha: c.sha,
+      title: String(c.commit.message || "").split("\n")[0],
+      date: new Date(c.commit.committer.date)
+    }));
+  }
   const url = `https://github.com/${BACKUP_CONFIG.OWNER}/${BACKUP_CONFIG.REPO}/commits/${BACKUP_CONFIG.BRANCH}.atom`;
   const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) throw new Error(`讀取 GitHub 版本清單失敗 (HTTP ${res.getResponseCode()})`);
