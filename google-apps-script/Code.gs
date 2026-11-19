@@ -60,8 +60,13 @@ function signPayload_(payload) {
   return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payload, getAuthSecret_()));
 }
 
+// 登入有效 30 天，每天使用時自動續期 (滑動期限)：天天用的人不必重新登入；連續 30 天沒用才要重新登入。
+// 停用帳號、改角色時會立即失效 (token version)。
+const SESSION_DAYS = 30;
+const SESSION_RENEW_AFTER_MS = 24 * 60 * 60 * 1000; // 距上次簽發超過 1 天就換發新的
+
 function createAuthToken(userId, role) {
-  const expireAt = Date.now() + 12 * 60 * 60 * 1000; // 12 小時
+  const expireAt = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
   const payload = `${userId}:${expireAt}:${getTokenVersion_(userId)}`;
   return `${Utilities.base64EncodeWebSafe(payload)}.${signPayload_(payload)}`;
 }
@@ -75,7 +80,7 @@ function verifyAuthToken(token) {
     const [userId, expireAt, tv] = payload.split(":");
     if (!userId || Date.now() > parseInt(expireAt, 10)) return null;
     if (tv !== getTokenVersion_(userId)) return null;
-    return { userId };
+    return { userId, expireAt: parseInt(expireAt, 10) };
   } catch (e) {
     return null;
   }
@@ -367,12 +372,16 @@ function handleRequest(e) {
       params.userId = me.id;
       params.approverId = me.id;
       params._me = me;
+      // 滑動續期：token 已簽發超過 1 天，就在回應中附上新的 token
+      if (tokenPayload.expireAt - Date.now() < SESSION_DAYS * 24 * 60 * 60 * 1000 - SESSION_RENEW_AFTER_MS) {
+        params._renewedToken = createAuthToken(me.id, me.role);
+      }
     }
 
     switch (action) {
       case "ping":
         result = {
-          success: true, apiVersion: "20261119_V11", message: "Leave System API is online.", timestamp: new Date().toISOString(),
+          success: true, apiVersion: "20261119_V12", message: "Leave System API is online.", timestamp: new Date().toISOString(),
           googleClientId: getGoogleClientId_(), passwordLoginEnabled: isPasswordLoginEnabled_()
         };
         break;
@@ -482,6 +491,7 @@ function handleRequest(e) {
         result = { success: false, message: "Action not supported: " + action };
     }
 
+    if (params._renewedToken && result && typeof result === "object") result.renewedToken = params._renewedToken;
     output.setContent(JSON.stringify(result));
     return output;
   } catch (err) {

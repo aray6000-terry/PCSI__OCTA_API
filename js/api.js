@@ -197,6 +197,15 @@ const ApiService = {
         this.setConnectionStatus("online");
 
         // token 失效：強制登出，不降級到本機資料
+        // 後端自動續期：換上新的登入憑證 (登入有效 30 天，天天使用就不會過期)
+        if (result && result.renewedToken) {
+          try {
+            sessionStorage.setItem(SYSTEM_CONFIG.STORAGE_KEYS.AUTH_TOKEN, result.renewedToken);
+            localStorage.setItem(SYSTEM_CONFIG.STORAGE_KEYS.AUTH_TOKEN, result.renewedToken);
+          } catch (e) {}
+          delete result.renewedToken;
+        }
+
         if (result && result.authError) {
           if (typeof App !== "undefined" && App.handleLogout) App.handleLogout();
           return result;

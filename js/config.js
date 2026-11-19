@@ -4,7 +4,7 @@
 const SYSTEM_CONFIG = {
   // 前端版本號：每次更新前端時一併修改 (顯示於頁面最下方)。
   // ⚠️ 同時要把 index.html 裡 css / js 網址後面的 ?v= 改成新值，否則瀏覽器會沿用舊快取。
-  APP_VERSION: "V11 · 2026-11-19",
+  APP_VERSION: "V12 · 2026-11-19",
 
   // Google 帳號登入的 OAuth Client ID。可留空：系統會改讀後端「指令碼屬性 GOOGLE_CLIENT_ID」。
   GOOGLE_CLIENT_ID: "",
