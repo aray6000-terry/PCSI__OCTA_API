@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <!-- 核心樣式 -->
-  <link rel="stylesheet" href="css/style.css?v=20261119_14">
+  <link rel="stylesheet" href="css/style.css?v=20261120_1">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -1026,6 +1026,19 @@
               <button type="button" class="btn btn-sm btn-secondary" onclick="App.loadMyAttendance()"><i class="fa-solid fa-rotate"></i> 重新整理</button>
             </div>
             <div class="attendance-stats" id="attStats"></div>
+            <div class="form-card att-export-card" id="attExportCard" hidden style="max-width: 100%; width: 100%; box-sizing: border-box;">
+              <div class="panel-header">
+                <div class="panel-title"><i class="fa-solid fa-file-excel" style="color: var(--success, #16a34a);"></i> 匯出出勤紀錄（人資部 / 管理部）</div>
+              </div>
+              <p class="accounts-help">匯出 Excel，內含「每日明細」與「統計」兩張工作表。可選單一同仁或全部同仁；一次最多 366 天。</p>
+              <div class="attendance-toolbar att-export-toolbar">
+                <select class="form-control" id="attExportUser"><option value="ALL">全部同仁</option></select>
+                <input type="date" class="form-control" id="attExportFrom" aria-label="開始日期">
+                <span class="att-export-sep">～</span>
+                <input type="date" class="form-control" id="attExportTo" aria-label="結束日期">
+                <button type="button" class="btn btn-sm btn-primary" id="attExportBtn" onclick="App.exportAttendanceXlsx()"><i class="fa-solid fa-file-arrow-down"></i> 匯出 Excel</button>
+              </div>
+            </div>
             <div class="form-card" style="max-width: 100%; width: 100%; box-sizing: border-box;">
               <div class="table-responsive">
                 <table class="custom-table attendance-table">
@@ -1531,10 +1544,11 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- 系統核心 JS 模組載入 (防快取版本) -->
-  <script src="js/config.js?v=20261119_14"></script>
-  <script src="js/engine.js?v=20261119_14"></script>
-  <script src="js/mock-data.js?v=20261119_14"></script>
-  <script src="js/api.js?v=20261119_14"></script>
-  <script src="js/app.js?v=20261119_14"></script>
+  <script src="js/config.js?v=20261120_1"></script>
+  <script src="js/engine.js?v=20261120_1"></script>
+  <script src="js/mock-data.js?v=20261120_1"></script>
+  <script src="js/xlsx-lite.js?v=20261120_1"></script>
+  <script src="js/api.js?v=20261120_1"></script>
+  <script src="js/app.js?v=20261120_1"></script>
 </body>
 </html>

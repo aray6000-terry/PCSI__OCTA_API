@@ -381,7 +381,7 @@ function handleRequest(e) {
     switch (action) {
       case "ping":
         result = {
-          success: true, apiVersion: "20261119_V12", message: "Leave System API is online.", timestamp: new Date().toISOString(),
+          success: true, apiVersion: "20261120_V13", message: "Leave System API is online.", timestamp: new Date().toISOString(),
           googleClientId: getGoogleClientId_(), passwordLoginEnabled: isPasswordLoginEnabled_()
         };
         break;
@@ -417,6 +417,10 @@ function handleRequest(e) {
 
       case "listLocations":
         result = listLocations(params);
+        break;
+
+      case "exportAttendance":
+        result = exportAttendance(params);
         break;
 
       case "saveLocation":

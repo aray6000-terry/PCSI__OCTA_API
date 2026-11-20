@@ -430,7 +430,113 @@ function getAttendance(params) {
     stats: stats,
     viewable: viewable,
     // 照片連結只給可管理出勤的人看 (人資 / 管理者)；一般同仁看到「已拍照」
-    canSeePhotos: isAdminOrHR_(me)
+    canSeePhotos: isAdminOrHR_(me),
+    // 人資部 / 管理部：匯出用的同仁清單
+    canExport: canExportAttendance_(me),
+    exportUsers: canExportAttendance_(me)
+      ? users.filter(u => !isUserDisabled_(u) && !isTopAdmin_(u)).map(u => ({ id: u.id, name: u.name, department_name: u.department_name }))
+      : []
+  };
+}
+
+// ======================== 出勤匯出 (人資部 / 管理部) ========================
+
+const ATT_EXPORT_DEPTS = ["DEPT_HR", "DEPT_MGMT"];
+const ATT_EXPORT_DEPT_NAMES = ["人資部", "人力資源部", "管理部"];
+const ATT_EXPORT_MAX_DAYS = 366;
+
+// 人資部、管理部的同仁 (不論角色)，以及人資 / 管理者角色、超級使用者，可以匯出出勤
+function canExportAttendance_(user) {
+  if (!user) return false;
+  if (isAdminOrHR_(user)) return true;
+  return ATT_EXPORT_DEPTS.indexOf(String(user.department_id || "").trim()) !== -1 ||
+    ATT_EXPORT_DEPT_NAMES.indexOf(String(user.department_name || "").trim()) !== -1;
+}
+
+/**
+ * 匯出出勤：每日明細 + 每人統計
+ * params: { from: "yyyy-MM-dd", to: "yyyy-MM-dd", targetUserId: 員工編號 或 "ALL" }
+ * 「全部」不含已停用帳號與免打卡的最高主管 (有打卡紀錄的已停用同仁仍會列入)
+ */
+function exportAttendance(params) {
+  const me = params._me;
+  if (!canExportAttendance_(me)) return { success: false, message: "只有人資部、管理部可以匯出出勤紀錄。" };
+
+  const today = todayStr_();
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  const from = String(params.from || ""), to0 = String(params.to || "");
+  if (!re.test(from) || !re.test(to0)) return { success: false, message: "請選擇開始與結束日期。" };
+  if (from > to0) return { success: false, message: "開始日期不能晚於結束日期。" };
+  if (from > today) return { success: false, message: "開始日期不能晚於今天。" };
+  const to = to0 > today ? today : to0;
+  const dayCount = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
+  if (dayCount > ATT_EXPORT_MAX_DAYS) return { success: false, message: "一次最多匯出 366 天，請縮小日期範圍。" };
+
+  const ss = ensureAttendanceSheets_();
+  const users = sheetToObjects(ss.getSheetByName(CONFIG.SHEETS.USERS)).filter(u => u.id);
+  const logs = sheetToObjects(ss.getSheetByName(ATT.SHEETS.LOGS)).filter(l => {
+    const d = String(l.date).slice(0, 10);
+    return d >= from && d <= to;
+  });
+
+  const all = String(params.targetUserId || "ALL") === "ALL";
+  let targets;
+  if (all) {
+    const hasLogs = {};
+    logs.forEach(l => { hasLogs[l.user_id] = true; });
+    targets = users.filter(u => !isTopAdmin_(u) && (!isUserDisabled_(u) || hasLogs[u.id]));
+  } else {
+    const t = users.find(u => u.id === params.targetUserId);
+    if (!t) return { success: false, message: "找不到這位同仁。" };
+    targets = [t];
+  }
+  targets.sort((a, b) => String(a.department_name).localeCompare(String(b.department_name)) || String(a.id).localeCompare(String(b.id)));
+
+  const requests = sheetToObjects(ss.getSheetByName(CONFIG.SHEETS.LEAVE_REQUESTS));
+  const holidays = holidayMap_(ss);
+  const dates = [];
+  for (let i = 0; i < dayCount; i++) {
+    dates.push(Utilities.formatDate(new Date(Date.parse(from) + i * 86400000 + 12 * 3600000), "UTC", "yyyy-MM-dd"));
+  }
+
+  const rows = [], summary = [];
+  targets.forEach(u => {
+    const myLogs = logs.filter(l => l.user_id === u.id);
+    const hire = String(u.hire_date || "").slice(0, 10).replace(/\//g, "-");
+    const st = { workdays: 0, attended: 0, late: 0, lateMin: 0, early: 0, earlyMin: 0, missing: 0, absent: 0, offsite: 0, leave: 0, stayAfter: 0, stayAfterMin: 0 };
+    dates.forEach(ds => {
+      if (hire && ds < hire) return;
+      const dayLogs = myLogs.filter(l => String(l.date).slice(0, 10) === ds);
+      const j = judgeDay_(u, ds, dayLogs, requests, holidays, ds === today);
+      const workday = isWorkday_(ds, holidays);
+      if (workday && j.status !== "免打卡") st.workdays++;
+      if (j.first_in || j.last_out) st.attended++;
+      if (j.late_min > 0) { st.late++; st.lateMin += j.late_min; }
+      if (j.early_min > 0) { st.early++; st.earlyMin += j.early_min; }
+      if (/缺上班卡|缺下班卡/.test(j.status)) st.missing++;
+      if (j.status === "未打卡") st.absent++;
+      if (j.offsite) st.offsite++;
+      if (/請假/.test(j.status)) st.leave++;
+      if (/晚下班/.test(j.status)) { st.stayAfter++; st.stayAfterMin += j.stay_after_min; }
+      // 只列工作日與有打卡的假日，休息日不佔列
+      if (!workday && !dayLogs.length) return;
+      rows.push({
+        date: ds, user_id: u.id, name: u.name, department_name: u.department_name || "",
+        holiday: holidays[ds] && !holidays[ds].isWorkday ? holidays[ds].name : "",
+        status: j.status, first_in: j.first_in, last_out: j.last_out, expected_in: j.expected_in, expected_out: j.expected_out,
+        late_min: j.late_min, early_min: j.early_min, stay_after_min: j.stay_after_min,
+        offsite: j.offsite, flags: j.flags,
+        punches: dayLogs.map(l => (l.type === "IN" ? "上 " : "下 ") + String(l.punched_at).slice(11, 16) + " " +
+          (String(l.in_range).toUpperCase() === "TRUE" ? l.location_name : "外勤：" + (l.site_name || ""))).join("；")
+      });
+    });
+    summary.push(Object.assign({ user_id: u.id, name: u.name, department_name: u.department_name || "" }, st));
+  });
+
+  return {
+    success: true, from: from, to: to, scope: all ? "ALL" : targets[0].id,
+    scopeName: all ? "全部同仁" : targets[0].name,
+    rows: rows, summary: summary, exportedBy: me.name, exportedAt: nowStr_()
   };
 }
 

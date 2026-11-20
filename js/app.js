@@ -3006,6 +3006,8 @@ const App = {
       sel.hidden = false;
     }
 
+    this.setupAttendanceExport(res);
+
     const s = res.stats;
     const stat = (n, label, cls) => `<div class="att-stat ${n > 0 ? cls : ""}"><b>${n}</b><span>${label}</span></div>`;
     document.getElementById("attStats").innerHTML =
@@ -3034,6 +3036,80 @@ const App = {
         <td class="att-where">${where || "—"}</td>
       </tr>`;
     }).join("") || `<tr><td colspan="6" class="att-empty">這個月還沒有資料。</td></tr>`;
+  },
+
+  // ---------- 出勤匯出 (人資部 / 管理部) ----------
+  setupAttendanceExport(res) {
+    const card = document.getElementById("attExportCard");
+    if (!card) return;
+    card.hidden = !res.canExport;
+    if (!res.canExport) return;
+    const sel = document.getElementById("attExportUser");
+    if (!sel.dataset.filled) {
+      sel.innerHTML = `<option value="ALL">全部同仁</option>` +
+        (res.exportUsers || []).map(u => `<option value="${esc(u.id)}">${esc(u.name)}（${esc(u.department_name || "")}）</option>`).join("");
+      sel.dataset.filled = "1";
+    }
+    const f = document.getElementById("attExportFrom"), t = document.getElementById("attExportTo");
+    if (!f.value || !t.value) {
+      const [y, m] = String(res.month).split("-").map(Number);
+      const p = n => String(n).padStart(2, "0");
+      f.value = `${y}-${p(m)}-01`;
+      t.value = `${y}-${p(m)}-${p(new Date(y, m, 0).getDate())}`;
+    }
+  },
+
+  async exportAttendanceXlsx() {
+    const btn = document.getElementById("attExportBtn");
+    const targetUserId = document.getElementById("attExportUser").value || "ALL";
+    const from = document.getElementById("attExportFrom").value;
+    const to = document.getElementById("attExportTo").value;
+    if (!from || !to) { this.showToast("請選擇開始與結束日期", "warning"); return; }
+    if (from > to) { this.showToast("開始日期不能晚於結束日期", "warning"); return; }
+
+    btn.disabled = true;
+    const label = btn.innerHTML;
+    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 匯出中...`;
+    try {
+      const res = await ApiService.callApi("exportAttendance", { targetUserId, from, to });
+      if (!res || !res.success) { this.showToast(res ? res.message : "匯出失敗", "error"); return; }
+      if (!res.rows.length && !res.summary.length) { this.showToast("這段期間沒有出勤資料", "warning"); return; }
+
+      const n = v => (v === "" || v === null || v === undefined ? "" : Number(v) || 0);
+      const wd = d => "日一二三四五六"[new Date(d.replace(/-/g, "/")).getDay()];
+      const detail = {
+        name: "每日明細",
+        header: ["日期", "星期", "員工編號", "姓名", "部門", "上班", "下班", "應上班", "應下班", "狀態",
+                 "遲到(分)", "早退(分)", "晚下班(分)", "外勤工地", "打卡明細", "標示", "備註"],
+        widths: [12, 6, 10, 10, 10, 8, 8, 12, 8, 18, 9, 9, 11, 18, 44, 16, 12],
+        rows: res.rows.map(r => [r.date, wd(r.date), r.user_id, r.name, r.department_name, r.first_in, r.last_out,
+          r.expected_in, r.expected_out, r.status, n(r.late_min), n(r.early_min), n(r.stay_after_min),
+          r.offsite, r.punches, r.flags, r.holiday])
+      };
+      const summary = {
+        name: "統計",
+        header: ["員工編號", "姓名", "部門", "應出勤日", "出勤天數", "遲到次數", "遲到分鐘", "早退次數", "早退分鐘",
+                 "缺卡", "未打卡", "請假天數", "外勤天數", "晚下班次數", "晚下班分鐘"],
+        widths: [10, 10, 10, 9, 9, 9, 9, 9, 9, 7, 8, 9, 9, 11, 11],
+        rows: res.summary.map(s => [s.user_id, s.name, s.department_name, s.workdays, s.attended, s.late, s.lateMin,
+          s.early, s.earlyMin, s.missing, s.absent, s.leave, s.offsite, s.stayAfter, s.stayAfterMin])
+      };
+      const info = {
+        name: "匯出資訊",
+        header: ["項目", "內容"],
+        widths: [12, 40],
+        rows: [["期間", `${res.from} ～ ${res.to}`], ["範圍", res.scopeName], ["匯出人", res.exportedBy], ["匯出時間", res.exportedAt],
+          ["說明", "每日明細只列工作日與假日出勤；休息日不列出。未來日期不計。"]]
+      };
+      const who = res.scope === "ALL" ? "全部同仁" : res.scopeName;
+      XlsxLite.download(`出勤紀錄_${who}_${res.from.replace(/-/g, "")}-${res.to.replace(/-/g, "")}.xlsx`, [detail, summary, info]);
+      this.showToast(`已匯出 ${res.summary.length} 人、${res.rows.length} 筆出勤紀錄`, "success");
+    } catch (e) {
+      this.showToast("匯出失敗：" + e.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = label;
+    }
   },
 
   // ---------- 打卡地點 ----------
