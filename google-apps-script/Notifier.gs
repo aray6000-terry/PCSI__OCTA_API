@@ -19,7 +19,7 @@
 
 const DIGEST_CONFIG = {
   HOUR: 8,                                   // 每天幾點寄 (台北時間)
-  SYSTEM_URL: "https://aray6000-terry.github.io/USB_OCTA_API/",
+  SYSTEM_URL: "https://aray6000-terry.github.io/PCSI__OCTA_API/",
   LAST_RUN_KEY: "DIGEST_LAST_RUN_AT",
   ALWAYS_CC: ""                              // 選填：每封都副本給誰，例如 "hr@company.com"
 };

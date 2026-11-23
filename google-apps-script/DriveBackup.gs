@@ -20,7 +20,7 @@
 
 const BACKUP_CONFIG = {
   OWNER: "aray6000-terry",
-  REPO: "USB_OCTA_API",
+  REPO: "PCSI__OCTA_API",
   BRANCH: "main",
   FOLDER_ID: "1WOS5oFhmpWN7fHUySonmUDNgVlYzjDeb",   // Google Drive「請假系統」資料夾
   LOG_NAME: "版本紀錄",
@@ -63,7 +63,7 @@ function backupLatestToDrive() {
 }
 
 // ---------------------------------------------------------------
-// repo 已改為「私人」：需要一把唯讀的 GitHub 存取權杖 (Fine-grained token，只給 USB_OCTA_API 的 Contents: Read-only)，
+// repo 已改為「私人」：需要一把唯讀的 GitHub 存取權杖 (Fine-grained token，只給 PCSI__OCTA_API 的 Contents: Read-only)，
 // 存在「指令碼屬性」GITHUB_TOKEN。帶權杖時每小時有 5000 次額度，不會再遇到匿名 403。
 // 若沒有權杖、repo 又是公開的，會自動改用公開連結。
 
