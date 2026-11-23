@@ -1688,3 +1688,31 @@ tr.bulk-selected td { background: var(--primary-light); }
 .login-notes a { color: var(--primary); margin-left: 6px; }
 .att-export-card .att-export-toolbar { margin-top: 4px; }
 .att-export-sep { color: var(--text-muted, #64748b); }
+
+/* ---------- 今日出勤總覽 ---------- */
+.board-stats .att-stat { cursor: pointer; transition: border-color .15s, box-shadow .15s; text-align: left; font: inherit; color: inherit; }
+.board-stats .att-stat:hover { border-color: var(--primary); }
+.board-stats .att-stat.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(79, 70, 229, .18); }
+.board-stats .att-stat.ok b { color: #16a34a; }
+.board-table .board-name { font-weight: 600; color: var(--primary); cursor: pointer; background: none; border: 0; padding: 0; font: inherit; text-align: left; }
+.board-table .board-name:hover { text-decoration: underline; }
+.board-table .board-dept { display: block; font-size: 0.78rem; color: var(--text-muted); }
+@media (max-width: 768px) {
+  .board-stats { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .board-stats .att-stat { padding: 8px 6px; text-align: center; }
+  .board-stats .att-stat b { font-size: 1.05rem; }
+  .board-stats .att-stat span { font-size: 0.68rem; line-height: 1.25; display: block; }
+  .board-table thead { display: none; }
+  .board-table td[data-k="where"]:empty, .board-table td.board-nowhere { display: none; }
+  .board-table tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "name status" "in out" "where where"; gap: 4px 10px; padding: 10px 4px; border-bottom: 1px solid var(--border-color); }
+  .board-table td { border: 0 !important; padding: 0 !important; }
+  .board-table td[data-k="name"] { grid-area: name; }
+  .board-table td[data-k="status"] { grid-area: status; text-align: right; }
+  .board-table td[data-k="in"] { grid-area: in; }
+  .board-table td[data-k="out"] { grid-area: out; text-align: right; }
+  .board-table td[data-k="in"]::before { content: "上班 "; color: var(--text-muted); }
+  .board-table td[data-k="out"]::before { content: "下班 "; color: var(--text-muted); }
+  .board-table td[data-k="exp"] { display: none; }
+  .board-table td[data-k="where"] { grid-area: where; font-size: 0.8rem; }
+  .board-table td.att-empty { grid-column: 1 / -1; }
+}

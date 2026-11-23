@@ -615,6 +615,10 @@ const App = {
       viewName = "dashboard";
     }
 
+    if (viewName === "attendance-board" && !this.canManageLocations(user)) {
+      this.showToast("權限不足：出勤總覽僅限主管、人資與管理者查看。", "error");
+      viewName = "dashboard";
+    }
     if (viewName === "work-locations" && !this.canManageLocations(user)) {
       this.showToast("權限不足：打卡地點僅限主管、人資與管理者設定。", "error");
       viewName = "dashboard";
@@ -663,6 +667,7 @@ const App = {
       "hr-management": { title: "人事差勤與特休額度管理", sub: "全員到職日維護、勞基法歷年制特休額度核算與法定特休同步" },
       "punch": { title: "線上打卡", sub: "彈性上班 08:30～09:00，應下班 = 到班 + 9.5 小時" },
       "my-attendance": { title: "我的出勤", sub: "每日上下班時間、遲到早退與外勤紀錄" },
+      "attendance-board": { title: "今日出勤總覽", sub: "一次查看所有同仁當天的打卡狀態" },
       "work-locations": { title: "打卡地點", sub: "公司與工地的打卡範圍；完工後自動停用" },
       "accounts": { title: "帳號權限管理", sub: "以 Google 帳號 Email 開通、停用同仁的登入權限與角色" },
       "system-settings": { title: "系統後端與資料庫串接設定", sub: "管理 Google Apps Script Web App 雲端連線與資料庫路徑" },
@@ -708,6 +713,9 @@ const App = {
         break;
       case "work-locations":
         this.renderWorkLocationsView();
+        break;
+      case "attendance-board":
+        this.renderAttendanceBoardView();
         break;
       case "system-settings":
         this.renderSystemSettings();
@@ -2971,6 +2979,8 @@ const App = {
   },
 
   renderMyAttendanceView() {
+    const boardBtn = document.getElementById("attBoardBtn");
+    if (boardBtn) boardBtn.hidden = !this.canManageLocations(this.state.currentUser);
     const m = document.getElementById("attMonth");
     if (m && !m.value) {
       const d = new Date();
@@ -2991,6 +3001,8 @@ const App = {
     const month = (document.getElementById("attMonth") || {}).value;
     const params = { month };
     if (sel && !sel.hidden && sel.value) params.targetUserId = sel.value;
+    // 從「今日出勤總覽」點同仁進來
+    if (this._attJumpUserId) { params.targetUserId = this._attJumpUserId; this._attJumpUserId = null; }
     const res = await ApiService.callApi("getAttendance", params);
     if (!res || !res.success) {
       tbody.innerHTML = `<tr><td colspan="6" class="att-empty">${esc(res ? res.message : "讀取失敗")}</td></tr>`;
@@ -3036,6 +3048,122 @@ const App = {
         <td class="att-where">${where || "—"}</td>
       </tr>`;
     }).join("") || `<tr><td colspan="6" class="att-empty">這個月還沒有資料。</td></tr>`;
+  },
+
+  // ---------- 今日出勤總覽 (主管 / 人資 / 管理者) ----------
+  todayDateStr() {
+    const d = new Date(), p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  },
+
+  renderAttendanceBoardView() {
+    const el = document.getElementById("boardDate");
+    if (el) {
+      el.max = this.todayDateStr();
+      if (!el.value) el.value = el.max;
+    }
+    this.loadAttendanceBoard();
+  },
+
+  setBoardToday() {
+    const el = document.getElementById("boardDate");
+    if (el) el.value = this.todayDateStr();
+    this.loadAttendanceBoard();
+  },
+
+  async loadAttendanceBoard() {
+    const tbody = document.getElementById("boardTableBody");
+    if (!tbody) return;
+    if (!ApiService.isUsingRemoteGas()) {
+      tbody.innerHTML = `<tr><td colspan="6" class="att-empty">出勤總覽需連線雲端資料庫，展示模式無法使用。</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = `<tr><td colspan="6" class="att-empty">載入中...</td></tr>`;
+    const date = (document.getElementById("boardDate") || {}).value || "";
+    const res = await ApiService.callApi("getAttendanceBoard", { date });
+    if (!res || !res.success) {
+      const msg = res && /not supported|Unknown|不支援/i.test(String(res.message || ""))
+        ? "後端尚未更新：請把最新的 Code.gs 與 Attendance.gs 貼到 Apps Script 並部署新版本。"
+        : (res ? res.message : "讀取失敗");
+      tbody.innerHTML = `<tr><td colspan="6" class="att-empty">${esc(msg)}</td></tr>`;
+      return;
+    }
+    this._board = res;
+    if (!this._boardFilter) this._boardFilter = "all";
+    this.renderAttendanceBoard();
+  },
+
+  boardFilters() {
+    return {
+      all: { label: "全部同仁", test: () => true, n: s => s.total, cls: "" },
+      arrived: { label: "已到班", test: r => !!r.first_in, n: s => s.arrived, cls: "ok" },
+      notIn: { label: "未到班", test: r => /未到班|未打卡|尚未打卡/.test(r.status), n: s => s.notIn, cls: "bad" },
+      late: { label: "遲到", test: r => r.late_min > 0, n: s => s.late, cls: "warn" },
+      missing: { label: "缺卡", test: r => /缺上班卡|缺下班卡/.test(r.status), n: s => s.missing, cls: "warn" },
+      leave: { label: "請假", test: r => /請假/.test(r.status), n: s => s.leave, cls: "" },
+      offsite: { label: "外勤", test: r => !!r.offsite, n: s => s.offsite, cls: "" },
+      out: { label: "已下班", test: r => !!r.last_out, n: s => s.out, cls: "" }
+    };
+  },
+
+  setBoardFilter(key) {
+    this._boardFilter = this._boardFilter === key ? "all" : key;
+    this.renderAttendanceBoard();
+  },
+
+  renderAttendanceBoard() {
+    const res = this._board;
+    if (!res) return;
+    const filters = this.boardFilters();
+    const cur = filters[this._boardFilter] ? this._boardFilter : "all";
+    const s = res.summary;
+
+    const wd = "日一二三四五六"[new Date(res.date.replace(/-/g, "/")).getDay()];
+    const meta = [`${res.date}（${wd}）`, res.scope, res.isToday ? `更新於 ${res.now}` : ""];
+    if (!res.workday) meta.push(res.holiday ? `${res.holiday}（休假日）` : "休息日");
+    document.getElementById("boardMeta").textContent = meta.filter(Boolean).join(" · ");
+
+    // notIn 在今天 09:00 前是「尚未打卡」，顯示為一般顏色
+    document.getElementById("boardStats").innerHTML = Object.keys(filters).map(k => {
+      const f = filters[k], n = f.n(s);
+      const cls = n > 0 ? f.cls : "";
+      return `<button type="button" class="att-stat ${cls} ${cur === k ? "active" : ""}" onclick="App.setBoardFilter('${k}')"><b>${n}</b><span>${esc(f.label)}</span></button>`;
+    }).join("");
+
+    const tbody = document.getElementById("boardTableBody");
+    const rows = res.rows.filter(filters[cur].test);
+    if (!res.rows.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="att-empty">沒有可查看的同仁。</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const where = (r.logs || []).map(l => {
+        const place = l.in_range ? l.location_name : "外勤：" + (l.site_name || "");
+        const photo = l.photo_url && res.canSeePhotos
+          ? ` <a href="${esc(safeHttpUrl(l.photo_url) || "#")}" target="_blank" rel="noopener noreferrer">照片</a>`
+          : (l.has_photo ? " · 已拍照" : "");
+        return `${l.type === "IN" ? "上" : "下"} ${esc(String(l.punched_at).slice(11, 16))} ${esc(place)}${photo}${l.flags ? ` <span class="att-flag">${esc(l.flags)}</span>` : ""}`;
+      }).join("<br>");
+      const extra = [r.late_min > 0 ? `遲到 ${r.late_min} 分` : "", r.early_min > 0 ? `早退 ${r.early_min} 分` : "",
+        r.stay_after_min >= 30 ? `晚 ${r.stay_after_min} 分下班` : ""].filter(Boolean).join("、");
+      const badge = r.status === "未到班" ? "bad" : this.attBadgeClass(r.status);
+      return `<tr>
+        <td data-k="name"><button type="button" class="board-name" title="查看本月出勤" onclick="App.openAttendanceOf(${jsArg(r.user_id)})">${esc(r.name)}</button><span class="board-dept">${esc(r.department_name)}</span></td>
+        <td data-k="in">${esc(r.first_in || "—")}</td>
+        <td data-k="out">${esc(r.last_out || "—")}</td>
+        <td data-k="exp">${esc(r.expected_out || "—")}</td>
+        <td data-k="status"><span class="att-badge ${badge}">${esc(r.status)}</span>${extra ? `<br><span class="punch-hint">${esc(extra)}</span>` : ""}</td>
+        <td data-k="where" class="att-where${where ? "" : " board-nowhere"}">${where || "—"}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="6" class="att-empty">沒有符合「${esc(filters[cur].label)}」的同仁。</td></tr>`;
+  },
+
+  openAttendanceOf(userId) {
+    this._attJumpUserId = userId;
+    const m = document.getElementById("attMonth");
+    const date = (document.getElementById("boardDate") || {}).value;
+    if (m && date) m.value = date.slice(0, 7);
+    this.navigate("my-attendance");
   },
 
   // ---------- 出勤匯出 (人資部 / 管理部) ----------
@@ -3863,6 +3991,9 @@ const App = {
     }
 
     // 人事差勤維護選單：HR 與最高管理者 (Admin) 顯示
+    const navAttendanceBoard = document.getElementById("navAttendanceBoard");
+    if (navAttendanceBoard) navAttendanceBoard.style.display = this.canManageLocations(user) ? "flex" : "none";
+
     const navWorkLocations = document.getElementById("navWorkLocations");
     if (navWorkLocations) navWorkLocations.style.display = this.canManageLocations(user) ? "flex" : "none";
 

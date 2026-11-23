@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <!-- 核心樣式 -->
-  <link rel="stylesheet" href="css/style.css?v=20261120_1">
+  <link rel="stylesheet" href="css/style.css?v=20261123_1">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -145,6 +145,10 @@
         </a>
 
         <div class="nav-section-title">管理與審核</div>
+        <a class="nav-item" data-view="attendance-board" id="navAttendanceBoard" style="display: none;">
+          <i class="fa-solid fa-users-viewfinder"></i>
+          <span>今日出勤總覽</span>
+        </a>
         <a class="nav-item" data-view="work-locations" id="navWorkLocations" style="display: none;">
           <i class="fa-solid fa-map-location-dot"></i>
           <span>打卡地點</span>
@@ -1024,6 +1028,7 @@
               <select class="form-control" id="attUserSelect" onchange="App.loadMyAttendance()" hidden></select>
               <input type="month" class="form-control" id="attMonth" onchange="App.loadMyAttendance()">
               <button type="button" class="btn btn-sm btn-secondary" onclick="App.loadMyAttendance()"><i class="fa-solid fa-rotate"></i> 重新整理</button>
+              <button type="button" class="btn btn-sm btn-primary" id="attBoardBtn" hidden onclick="App.navigate('attendance-board')"><i class="fa-solid fa-users-viewfinder"></i> 今日全員出勤</button>
             </div>
             <div class="attendance-stats" id="attStats"></div>
             <div class="form-card att-export-card" id="attExportCard" hidden style="max-width: 100%; width: 100%; box-sizing: border-box;">
@@ -1046,6 +1051,29 @@
                     <tr><th>日期</th><th>上班</th><th>下班</th><th>應下班</th><th>狀態</th><th>地點</th></tr>
                   </thead>
                   <tbody id="attTableBody"><tr><td colspan="6" class="att-empty">載入中...</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 今日出勤總覽 (主管 / 人資 / 管理者) ==================== -->
+        <section class="view-section" id="view-attendance-board">
+          <div style="display: flex; flex-direction: column; gap: 20px; max-width: 1080px; margin: 0 auto;">
+            <div class="attendance-toolbar">
+              <input type="date" class="form-control" id="boardDate" onchange="App.loadAttendanceBoard()" aria-label="日期">
+              <button type="button" class="btn btn-sm btn-secondary" onclick="App.setBoardToday()"><i class="fa-solid fa-calendar-day"></i> 今天</button>
+              <button type="button" class="btn btn-sm btn-secondary" onclick="App.loadAttendanceBoard()"><i class="fa-solid fa-rotate"></i> 重新整理</button>
+              <span class="punch-hint" id="boardMeta"></span>
+            </div>
+            <div class="attendance-stats board-stats" id="boardStats"></div>
+            <div class="form-card" style="max-width: 100%; width: 100%; box-sizing: border-box;">
+              <div class="table-responsive">
+                <table class="custom-table attendance-table board-table">
+                  <thead>
+                    <tr><th>同仁</th><th>上班</th><th>下班</th><th>應下班</th><th>狀態</th><th>打卡地點</th></tr>
+                  </thead>
+                  <tbody id="boardTableBody"><tr><td colspan="6" class="att-empty">載入中...</td></tr></tbody>
                 </table>
               </div>
             </div>
@@ -1544,11 +1572,11 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- 系統核心 JS 模組載入 (防快取版本) -->
-  <script src="js/config.js?v=20261120_1"></script>
-  <script src="js/engine.js?v=20261120_1"></script>
-  <script src="js/mock-data.js?v=20261120_1"></script>
-  <script src="js/xlsx-lite.js?v=20261120_1"></script>
-  <script src="js/api.js?v=20261120_1"></script>
-  <script src="js/app.js?v=20261120_1"></script>
+  <script src="js/config.js?v=20261123_1"></script>
+  <script src="js/engine.js?v=20261123_1"></script>
+  <script src="js/mock-data.js?v=20261123_1"></script>
+  <script src="js/xlsx-lite.js?v=20261123_1"></script>
+  <script src="js/api.js?v=20261123_1"></script>
+  <script src="js/app.js?v=20261123_1"></script>
 </body>
 </html>

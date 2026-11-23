@@ -439,6 +439,79 @@ function getAttendance(params) {
   };
 }
 
+// ======================== 今日出勤總覽 (一次看全部同仁) ========================
+
+/**
+ * 某一天所有同仁的打卡狀態。超級使用者 / 人資 / 管理者看全部；主管看直屬部屬 (含自己)。
+ * params: { date?: "yyyy-MM-dd" (預設今天) }
+ * 不列已停用帳號與免打卡的最高主管。
+ */
+function getAttendanceBoard(params) {
+  const me = params._me;
+  const isAll = isAdminOrHR_(me);
+  if (!isAll && me.role !== "Manager") return { success: false, message: "只有主管、人資或管理者可以查看出勤總覽。" };
+
+  const today = todayStr_();
+  let date = /^\d{4}-\d{2}-\d{2}$/.test(String(params.date || "")) ? params.date : today;
+  if (date > today) date = today;
+  const isToday = date === today;
+
+  const ss = ensureAttendanceSheets_();
+  const users = sheetToObjects(ss.getSheetByName(CONFIG.SHEETS.USERS))
+    .filter(u => u.id && !isUserDisabled_(u) && !isTopAdmin_(u) && canViewAttendanceOf_(me, u));
+  const logs = sheetToObjects(ss.getSheetByName(ATT.SHEETS.LOGS)).filter(l => String(l.date).slice(0, 10) === date);
+  const requests = sheetToObjects(ss.getSheetByName(CONFIG.SHEETS.LEAVE_REQUESTS));
+  const holidays = holidayMap_(ss);
+  const nowMin = minOfDay_(nowStr_());
+  const canSeePhotos = isAdminOrHR_(me);
+
+  const rows = users.map(u => {
+    const dayLogs = logs.filter(l => l.user_id === u.id).sort((a, b) => String(a.punched_at).localeCompare(String(b.punched_at)));
+    const j = judgeDay_(u, date, dayLogs, requests, holidays, isToday);
+    const hire = String(u.hire_date || "").slice(0, 10).replace(/\//g, "-");
+    if (hire && date < hire) j.status = "尚未到職";
+    // 今天過了 09:00 還沒打上班卡 → 標示「未到班」
+    const overdue = isToday && j.status === "尚未打卡" && nowMin > ATT.ARRIVE_UNTIL;
+    return {
+      user_id: u.id, name: u.name, department_name: u.department_name || "",
+      status: overdue ? "未到班" : j.status,
+      first_in: j.first_in, last_out: j.last_out, expected_out: j.expected_out,
+      late_min: j.late_min, early_min: j.early_min, stay_after_min: j.stay_after_min,
+      offsite: j.offsite, flags: j.flags,
+      logs: dayLogs.map(l => {
+        const s = stripLog_(l);
+        if (!canSeePhotos) s.photo_url = "";
+        return s;
+      })
+    };
+  });
+
+  // 有狀況的排前面：未到班 / 缺卡 → 遲到早退 → 還沒到 09:00 → 正常 → 請假 → 休息
+  const order = s => /未到班|未打卡|缺/.test(s) ? 0 : /遲到|早退/.test(s) ? 1 : /尚未打卡/.test(s) ? 2 : /請假/.test(s) ? 4 : /休息|免打卡|到職/.test(s) ? 5 : 3;
+  rows.sort((a, b) => order(a.status) - order(b.status) ||
+    String(a.department_name).localeCompare(String(b.department_name)) || String(a.user_id).localeCompare(String(b.user_id)));
+
+  const count = re => rows.filter(r => re.test(r.status)).length;
+  return {
+    success: true, date: date, isToday: isToday, now: isToday ? hhmm_(nowMin) : "",
+    workday: isWorkday_(date, holidays),
+    holiday: holidays[date] && !holidays[date].isWorkday ? holidays[date].name : "",
+    scope: isAll ? "全部同仁" : "直屬部屬",
+    canSeePhotos: canSeePhotos,
+    rows: rows,
+    summary: {
+      total: rows.length,
+      arrived: rows.filter(r => r.first_in).length,
+      late: rows.filter(r => r.late_min > 0).length,
+      notIn: count(/未到班|未打卡|尚未打卡/),
+      missing: count(/缺上班卡|缺下班卡/),
+      leave: count(/請假/),
+      offsite: rows.filter(r => r.offsite).length,
+      out: rows.filter(r => r.last_out).length
+    }
+  };
+}
+
 // ======================== 出勤匯出 (人資部 / 管理部) ========================
 
 const ATT_EXPORT_DEPTS = ["DEPT_HR", "DEPT_MGMT"];
