@@ -15,7 +15,7 @@
 
 const ATT = {
   SHEETS: { LOGS: "attendance_logs", DAILY: "attendance_daily", LOCATIONS: "work_locations" },
-  COMPANY_ADDRESS: "台北市南港區南港路二段97號",
+  COMPANY_ADDRESS: "桃園市中壢區民權路二段147號",
   DEFAULT_RADIUS_M: 200,
   ARRIVE_FROM: 8 * 60 + 30,     // 08:30
   ARRIVE_UNTIL: 9 * 60,         // 09:00
@@ -66,7 +66,7 @@ function seedCompanyLocation_(locSheet) {
   } catch (e) {
     console.error("公司地址定位失敗：" + e);
   }
-  locSheet.appendRow(["LOC-COMPANY", "公司（南港路二段97號）", "公司", ATT.COMPANY_ADDRESS, lat, lng,
+  locSheet.appendRow(["LOC-COMPANY", "百成系統整合（民權路二段147號）", "公司", ATT.COMPANY_ADDRESS, lat, lng,
     ATT.DEFAULT_RADIUS_M, "", "", "SYSTEM", nowStr_()]);
 }
 
